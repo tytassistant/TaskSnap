@@ -902,18 +902,41 @@
   <!-- ======= LIST SELECTOR MODAL ======= -->
   <div class="modal-overlay" id="listModal">
     <div class="modal-box">
-      <h3>Select a task list</h3>
-      <p>Choose which Microsoft To Do list to add the tasks to.</p>
-      <div class="field">
-        <label>Task List</label>
-        <select id="listSelect">
-          <option value="">Loading lists…</option>
-        </select>
+      <h3>Choose task lists</h3>
+      <p>Select which Microsoft To Do list each group should sync to.</p>
+
+      <!-- Priority tasks section -->
+      <div id="modalPrioritySection" style="display:none;">
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+          <i class="fas fa-fire" style="color:var(--danger); font-size:13px;"></i>
+          <span style="font-size:13px; font-weight:700; color:var(--danger); text-transform:uppercase; letter-spacing:0.04em;" id="modalPriorityLabel">Priority (0)</span>
+        </div>
+        <div class="field" style="margin-bottom:8px;">
+          <select id="listSelectPriority">
+            <option value="">Loading lists…</option>
+          </select>
+        </div>
+        <div class="field" style="margin-bottom:16px;">
+          <input type="text" id="newListInputPriority" placeholder="Or create new list (optional)">
+        </div>
       </div>
-      <div class="field">
-        <label>Or create new list</label>
-        <input type="text" id="newListInput" placeholder="New list name (optional)">
+
+      <!-- Other tasks section -->
+      <div id="modalOtherSection" style="display:none;">
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+          <i class="fas fa-list-check" style="color:var(--text-tertiary); font-size:13px;"></i>
+          <span style="font-size:13px; font-weight:700; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.04em;" id="modalOtherLabel">Other Tasks (0)</span>
+        </div>
+        <div class="field" style="margin-bottom:8px;">
+          <select id="listSelectOther">
+            <option value="">Loading lists…</option>
+          </select>
+        </div>
+        <div class="field" style="margin-bottom:16px;">
+          <input type="text" id="newListInputOther" placeholder="Or create new list (optional)">
+        </div>
       </div>
+
       <div class="modal-actions">
         <button class="btn btn-outline btn-sm" id="listModalCancel" type="button">Cancel</button>
         <button class="btn btn-primary btn-sm" id="listModalConfirm" type="button">
@@ -1046,8 +1069,14 @@
   var syncDoneText = $id("syncDoneText");
   var newScanBtn = $id("newScanBtn");
   var listModal = $id("listModal");
-  var listSelect = $id("listSelect");
-  var newListInput = $id("newListInput");
+  var listSelectPriority = $id("listSelectPriority");
+  var newListInputPriority = $id("newListInputPriority");
+  var listSelectOther = $id("listSelectOther");
+  var newListInputOther = $id("newListInputOther");
+  var modalPrioritySection = $id("modalPrioritySection");
+  var modalOtherSection = $id("modalOtherSection");
+  var modalPriorityLabel = $id("modalPriorityLabel");
+  var modalOtherLabel = $id("modalOtherLabel");
   var listModalCancel = $id("listModalCancel");
   var listModalConfirm = $id("listModalConfirm");
   var logoutBtn = $id("logoutBtn");
@@ -1160,7 +1189,7 @@
     return html;
   }
 
-  // ========== TOKEN EXPIRY TRACKING ==========
+  // ========== SESSION STATUS TRACKING ==========
   function startTokenExpiryTracker() {
     stopTokenExpiryTracker();
     updateExpiryBadge();
@@ -1176,24 +1205,21 @@
   }
 
   function updateExpiryBadge() {
-    if (!state.tokenExpiresAt) {
+    // MSAL handles token refresh silently via refresh tokens (up to 90 days).
+    // The access token expires every ~60 min, but MSAL renews it automatically.
+    // So we show session status, not an access token countdown.
+    if (!state.msalInstance) {
       tokenExpiryBadge.style.display = "none";
       return;
     }
-    var remaining = state.tokenExpiresAt - Date.now();
-    tokenExpiryBadge.style.display = "";
-    if (remaining <= 0) {
-      tokenExpiryBadge.className = "token-expiry expired";
-      tokenExpiryBadge.textContent = "Token expired — will auto-refresh";
-    } else if (remaining < 5 * 60 * 1000) {
-      var mins = Math.ceil(remaining / 60000);
-      tokenExpiryBadge.className = "token-expiry warning";
-      tokenExpiryBadge.textContent = "Refreshing in " + mins + "m";
-    } else {
-      var mins2 = Math.round(remaining / 60000);
-      tokenExpiryBadge.className = "token-expiry ok";
-      tokenExpiryBadge.textContent = mins2 + "m left";
+    var accounts = state.msalInstance.getAllAccounts();
+    if (accounts.length === 0) {
+      tokenExpiryBadge.style.display = "none";
+      return;
     }
+    tokenExpiryBadge.style.display = "";
+    tokenExpiryBadge.className = "token-expiry ok";
+    tokenExpiryBadge.textContent = "Session active";
   }
 
   // ========== MSAL INITIALIZATION ==========
@@ -2057,6 +2083,27 @@
 
   // ========== LIST MODAL ==========
   function openListModal() {
+    // Count checked priority and other tasks
+    var checkedPriority = state.tasks.filter(function(t) { return t.checked && !t.synced && t.title.trim() && t.priority; });
+    var checkedOther = state.tasks.filter(function(t) { return t.checked && !t.synced && t.title.trim() && !t.priority; });
+
+    // Show/hide sections based on what's checked
+    if (checkedPriority.length > 0) {
+      modalPrioritySection.style.display = "";
+      modalPriorityLabel.textContent = "Priority (" + checkedPriority.length + ")";
+      newListInputPriority.value = "";
+    } else {
+      modalPrioritySection.style.display = "none";
+    }
+
+    if (checkedOther.length > 0) {
+      modalOtherSection.style.display = "";
+      modalOtherLabel.textContent = "Other Tasks (" + checkedOther.length + ")";
+      newListInputOther.value = "";
+    } else {
+      modalOtherSection.style.display = "none";
+    }
+
     listModal.classList.add("open");
     fetchTaskLists();
   }
@@ -2070,8 +2117,23 @@
     if (e.target === listModal) { closeListModal(); }
   });
 
+  function populateListSelect(selectEl, lists) {
+    selectEl.innerHTML = "";
+    lists.forEach(function(list) {
+      var opt = document.createElement("option");
+      opt.value = list.id;
+      opt.textContent = list.displayName;
+      selectEl.appendChild(opt);
+    });
+    if (lists.length === 0) {
+      selectEl.innerHTML = '<option value="">No lists found</option>';
+    }
+  }
+
   async function fetchTaskLists() {
-    listSelect.innerHTML = '<option value="">Loading…</option>';
+    var loadingHtml = '<option value="">Loading…</option>';
+    listSelectPriority.innerHTML = loadingHtml;
+    listSelectOther.innerHTML = loadingHtml;
 
     try {
       var token = await getAccessToken();
@@ -2081,7 +2143,9 @@
       if (!resp.ok) {
         var detail = await parseGraphError(resp);
         if (detail.isAuthError) {
-          listSelect.innerHTML = '<option value="">Auth error — re-authenticate</option>';
+          var errHtml = '<option value="">Auth error — re-authenticate</option>';
+          listSelectPriority.innerHTML = errHtml;
+          listSelectOther.innerHTML = errHtml;
           showToast(formatGraphError(detail), "error");
           return;
         }
@@ -2089,28 +2153,50 @@
       }
       var data = await resp.json();
       state.lists = data.value || [];
-      listSelect.innerHTML = "";
-      state.lists.forEach(function(list) {
-        var opt = document.createElement("option");
-        opt.value = list.id;
-        opt.textContent = list.displayName;
-        listSelect.appendChild(opt);
-      });
-      if (state.lists.length === 0) {
-        listSelect.innerHTML = '<option value="">No lists found</option>';
-      }
+      populateListSelect(listSelectPriority, state.lists);
+      populateListSelect(listSelectOther, state.lists);
     } catch(err) {
-      listSelect.innerHTML = '<option value="">Error loading lists</option>';
+      var errHtml2 = '<option value="">Error loading lists</option>';
+      listSelectPriority.innerHTML = errHtml2;
+      listSelectOther.innerHTML = errHtml2;
       showToast("Could not load task lists: " + err.message, "error");
     }
   }
 
-  listModalConfirm.addEventListener("click", async function() {
-    var newListName = newListInput.value.trim();
-    var selectedId = listSelect.value;
+  // Helper: resolve a list ID from a select + new-name input pair
+  async function resolveListId(selectEl, newNameInput) {
+    var newName = newNameInput.value.trim();
+    if (newName) {
+      var listToken = await getAccessToken();
+      var resp = await fetch("https://graph.microsoft.com/v1.0/me/todo/lists", {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer " + listToken,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ displayName: newName })
+      });
+      if (!resp.ok) {
+        var listErrDetail = await parseGraphError(resp);
+        throw new Error(formatGraphError(listErrDetail));
+      }
+      var newList = await resp.json();
+      return newList.id;
+    }
+    return selectEl.value;
+  }
 
-    if (!newListName && !selectedId) {
-      showToast("Select a list or enter a new list name", "error");
+  listModalConfirm.addEventListener("click", async function() {
+    var hasPriority = modalPrioritySection.style.display !== "none";
+    var hasOther = modalOtherSection.style.display !== "none";
+
+    // Validate: each visible section needs a list selected or new name
+    if (hasPriority && !listSelectPriority.value && !newListInputPriority.value.trim()) {
+      showToast("Please select or create a list for priority tasks", "error");
+      return;
+    }
+    if (hasOther && !listSelectOther.value && !newListInputOther.value.trim()) {
+      showToast("Please select or create a list for other tasks", "error");
       return;
     }
 
@@ -2121,36 +2207,25 @@
     syncDoneCard.style.display = "none";
     syncProgressBar.style.width = "0%";
 
-    var listId = selectedId;
+    // Resolve list IDs (create new lists if needed)
+    var priorityListId = null;
+    var otherListId = null;
 
-    // Create new list if specified
-    if (newListName) {
-      syncStatusText.textContent = "Creating list \"" + newListName + "\"…";
-      try {
-        var listToken = await getAccessToken();
-        var resp = await fetch("https://graph.microsoft.com/v1.0/me/todo/lists", {
-          method: "POST",
-          headers: {
-            Authorization: "Bearer " + listToken,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({ displayName: newListName })
-        });
-        if (!resp.ok) {
-          var listErrDetail = await parseGraphError(resp);
-          throw new Error(formatGraphError(listErrDetail));
-        }
-        var newList = await resp.json();
-        listId = newList.id;
-      } catch(err) {
-        showToast("Failed to create list: " + err.message, "error");
-        updateStepper(3);
-        showSection("review");
-        return;
+    try {
+      if (hasPriority) {
+        syncStatusText.textContent = "Preparing priority task list…";
+        priorityListId = await resolveListId(listSelectPriority, newListInputPriority);
       }
+      if (hasOther) {
+        syncStatusText.textContent = "Preparing other task list…";
+        otherListId = await resolveListId(listSelectOther, newListInputOther);
+      }
+    } catch(err) {
+      showToast("Failed to create list: " + err.message, "error");
+      updateStepper(3);
+      showSection("review");
+      return;
     }
-
-    state.lastSyncListId = listId;
 
     // Sync only checked, unsynced tasks
     var unsyncedTasks = state.tasks.filter(function(t) { return t.checked && !t.synced && t.title.trim(); });
@@ -2179,6 +2254,7 @@
 
     for (var i = 0; i < unsyncedTasks.length; i++) {
       var task = unsyncedTasks[i];
+      var listId = task.priority ? priorityListId : otherListId;
       syncStatusText.textContent = "Creating task " + (i + 1) + " of " + total + "…";
       syncProgressBar.style.width = (((i + 1) / total) * 100) + "%";
 
@@ -2337,7 +2413,8 @@
     imageInput.value = "";
     extractBtn.disabled = true;
     taskList.innerHTML = "";
-    newListInput.value = "";
+    newListInputPriority.value = "";
+    newListInputOther.value = "";
     updateStepper(2);
     showSection("upload");
   });
