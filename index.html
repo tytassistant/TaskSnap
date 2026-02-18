@@ -2560,12 +2560,24 @@
             };
           }
         }
+        // Include reminder in creation request for event tasks
+        if (task.reminderDateTime) {
+          taskBody.isReminderOn = true;
+          taskBody.reminderDateTime = {
+            dateTime: task.reminderDateTime,
+            timeZone: tz
+          };
+        }
+
+        console.log("[TaskSnap] Creating task with body: " + JSON.stringify(taskBody));
+
         var taskToken = await getAccessToken();
         var tresp = await fetch("https://graph.microsoft.com/v1.0/me/todo/lists/" + listId + "/tasks", {
           method: "POST",
           headers: {
             Authorization: "Bearer " + taskToken,
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            Prefer: "outlook.timezone=\"" + tz + "\""
           },
           body: JSON.stringify(taskBody)
         });
@@ -2578,34 +2590,45 @@
         }
 
         var createdTask = await tresp.json();
+        console.log("[TaskSnap] Created task response: " + JSON.stringify({
+          id: createdTask.id,
+          isReminderOn: createdTask.isReminderOn,
+          reminderDateTime: createdTask.reminderDateTime,
+          dueDateTime: createdTask.dueDateTime
+        }));
 
-        // Set reminder via PATCH after creation (event tasks)
-        if (task.reminderDateTime && createdTask.id) {
+        // If reminder was not set during creation, try PATCH as fallback
+        if (task.reminderDateTime && createdTask.id && !createdTask.isReminderOn) {
           syncStatusText.textContent = "Setting reminder for task " + (i + 1) + " of " + total + "…";
+          console.log("[TaskSnap] Reminder not set during POST, trying PATCH...");
           try {
             var reminderToken = await getAccessToken();
+            var patchBody = {
+              isReminderOn: true,
+              reminderDateTime: {
+                dateTime: task.reminderDateTime,
+                timeZone: tz
+              }
+            };
             var reminderResp = await fetch(
               "https://graph.microsoft.com/v1.0/me/todo/lists/" + listId + "/tasks/" + createdTask.id,
               {
                 method: "PATCH",
                 headers: {
                   Authorization: "Bearer " + reminderToken,
-                  "Content-Type": "application/json"
+                  "Content-Type": "application/json",
+                  Prefer: "outlook.timezone=\"" + tz + "\""
                 },
-                body: JSON.stringify({
-                  isReminderOn: true,
-                  reminderDateTime: {
-                    dateTime: task.reminderDateTime,
-                    timeZone: tz
-                  }
-                })
+                body: JSON.stringify(patchBody)
               }
             );
-            if (!reminderResp.ok) {
-              console.log("Reminder set failed for task: " + JSON.stringify({ title: task.title, status: reminderResp.status }));
-            }
+            var patchResult = await reminderResp.json();
+            console.log("[TaskSnap] PATCH reminder response (" + reminderResp.status + "): " + JSON.stringify({
+              isReminderOn: patchResult.isReminderOn,
+              reminderDateTime: patchResult.reminderDateTime
+            }));
           } catch(reminderErr) {
-            console.log("Reminder set error: " + reminderErr.message);
+            console.log("[TaskSnap] Reminder PATCH error: " + reminderErr.message);
           }
         }
 
