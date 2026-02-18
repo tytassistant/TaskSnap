@@ -820,6 +820,11 @@
       <button class="btn btn-accent btn-block" id="extractBtn" type="button" disabled>
         <i class="fas fa-wand-magic-sparkles"></i> Extract tasks with AI
       </button>
+
+      <label id="liteModeLabel" style="display:flex; align-items:center; gap:10px; margin-top:14px; cursor:pointer; padding:10px 12px; background:var(--accent-light); border-radius:var(--radius-sm); font-size:14px; font-weight:600; color:var(--accent);">
+        <input type="checkbox" id="liteModeCheck" checked style="width:18px; height:18px; accent-color:var(--accent); cursor:pointer;">
+        <span><i class="fas fa-bolt" style="margin-right:4px;"></i> Lite mode — sync priority tasks only, skip review</span>
+      </label>
     </div>
   </div>
 
@@ -1051,6 +1056,7 @@
   var removeImgBtn = $id("removeImgBtn");
   var timezoneSelect = $id("timezoneSelect");
   var extractBtn = $id("extractBtn");
+  var liteModeCheck = $id("liteModeCheck");
   var taskList = $id("taskList");
   var addTaskBtn = $id("addTaskBtn");
   var reviewActions = $id("reviewActions");
@@ -1662,12 +1668,22 @@
       showToast("Please upload an image first", "error");
       return;
     }
-    updateStepper(3);
-    showSection("review");
-    extractionLoading.style.display = "block";
-    taskList.innerHTML = "";
-    addTaskBtn.style.display = "none";
-    reviewActions.style.display = "none";
+    if (liteModeCheck.checked) {
+      // In lite mode, show sync section with extracting status
+      updateStepper(4);
+      showSection("sync");
+      syncingCard.style.display = "";
+      syncDoneCard.style.display = "none";
+      syncProgressBar.style.width = "0%";
+      syncStatusText.textContent = "Extracting tasks from photo…";
+    } else {
+      updateStepper(3);
+      showSection("review");
+      extractionLoading.style.display = "block";
+      taskList.innerHTML = "";
+      addTaskBtn.style.display = "none";
+      reviewActions.style.display = "none";
+    }
 
     var promptText = [
       "Analyze this image of a to-do list carefully.",
@@ -1755,8 +1771,11 @@
 
         processExtractionResult(content);
       } catch(err) {
-        extractionLoading.style.display = "none";
         showToast("AI extraction failed: " + (err.message || String(err)), "error");
+        // Fall back to review section
+        updateStepper(3);
+        showSection("review");
+        extractionLoading.style.display = "none";
         reviewActions.style.display = "flex";
         addTaskBtn.style.display = "";
       }
@@ -1838,13 +1857,37 @@
     });
 
     showPhotoThumbnail();
+
+    // ===== LITE MODE: skip review, sync priority tasks directly =====
+    if (liteModeCheck.checked) {
+      var priTasks = state.tasks.filter(function(t) { return t.priority; });
+      if (priTasks.length === 0) {
+        // No priority tasks found — fall through to normal review
+        showToast("No priority tasks found. Showing full review.", "info");
+        renderPhotoDate();
+        renderTasks();
+        addTaskBtn.style.display = "";
+        reviewActions.style.display = "flex";
+        return;
+      }
+
+      var priCount = priTasks.length;
+      var totalCount = state.tasks.length;
+      showToast("Lite mode: " + priCount + " priority task" + (priCount > 1 ? "s" : "") + " of " + totalCount + " total — syncing now…", "success");
+
+      // Fetch lists and find the default priority list
+      liteModeSyncPriority();
+      return;
+    }
+
+    // ===== NORMAL MODE: show review =====
     renderPhotoDate();
     renderTasks();
     if (state.tasks.length > 0) {
-      var priCount = state.tasks.filter(function(t) { return t.priority; }).length;
+      var priCount2 = state.tasks.filter(function(t) { return t.priority; }).length;
       var msg = "Extracted " + state.tasks.length + " task" + (state.tasks.length > 1 ? "s" : "");
-      if (priCount > 0) {
-        msg += " (" + priCount + " priority)";
+      if (priCount2 > 0) {
+        msg += " (" + priCount2 + " priority)";
       }
       showToast(msg, "success");
     } else {
@@ -1853,6 +1896,73 @@
 
     addTaskBtn.style.display = "";
     reviewActions.style.display = "flex";
+  }
+
+  // ========== LITE MODE SYNC ==========
+  var LITE_PRIORITY_LIST_NAME = "Theo Quiz and Dictation";
+
+  async function liteModeSyncPriority() {
+    updateStepper(4);
+    showSection("sync");
+    syncingCard.style.display = "";
+    syncDoneCard.style.display = "none";
+    syncProgressBar.style.width = "0%";
+    syncStatusText.textContent = "Finding task list…";
+
+    try {
+      // Fetch task lists
+      var token = await getAccessToken();
+      var resp = await fetch("https://graph.microsoft.com/v1.0/me/todo/lists", {
+        headers: { Authorization: "Bearer " + token }
+      });
+      if (!resp.ok) {
+        var detail = await parseGraphError(resp);
+        throw new Error(formatGraphError(detail));
+      }
+      var data = await resp.json();
+      var lists = data.value || [];
+
+      // Find the default priority list by name
+      var priorityListId = null;
+      for (var i = 0; i < lists.length; i++) {
+        if (lists[i].displayName.toLowerCase() === LITE_PRIORITY_LIST_NAME.toLowerCase()) {
+          priorityListId = lists[i].id;
+          break;
+        }
+      }
+
+      if (!priorityListId) {
+        // List not found — create it
+        syncStatusText.textContent = "Creating \"" + LITE_PRIORITY_LIST_NAME + "\" list…";
+        var createToken = await getAccessToken();
+        var createResp = await fetch("https://graph.microsoft.com/v1.0/me/todo/lists", {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer " + createToken,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ displayName: LITE_PRIORITY_LIST_NAME })
+        });
+        if (!createResp.ok) {
+          var createDetail = await parseGraphError(createResp);
+          throw new Error(formatGraphError(createDetail));
+        }
+        var newList = await createResp.json();
+        priorityListId = newList.id;
+      }
+
+      // Execute sync — only priority tasks are checked
+      await executeSyncTasks(priorityListId, null);
+    } catch(err) {
+      showToast("Lite mode sync failed: " + err.message, "error");
+      // Fall back to review section
+      updateStepper(3);
+      showSection("review");
+      renderPhotoDate();
+      renderTasks();
+      addTaskBtn.style.display = "";
+      reviewActions.style.display = "flex";
+    }
   }
 
   // ========== RENDER PHOTO DATE ==========
@@ -2201,46 +2311,13 @@
     return selectEl.value;
   }
 
-  listModalConfirm.addEventListener("click", async function() {
-    var hasPriority = modalPrioritySection.style.display !== "none";
-    var hasOther = modalOtherSection.style.display !== "none";
-
-    // Validate: each visible section needs a list selected or new name
-    if (hasPriority && !listSelectPriority.value && !newListInputPriority.value.trim()) {
-      showToast("Please select or create a list for priority tasks", "error");
-      return;
-    }
-    if (hasOther && !listSelectOther.value && !newListInputOther.value.trim()) {
-      showToast("Please select or create a list for other tasks", "error");
-      return;
-    }
-
-    closeListModal();
+  // ========== SYNC EXECUTION (shared by modal confirm and lite mode) ==========
+  async function executeSyncTasks(priorityListId, otherListId) {
     updateStepper(4);
     showSection("sync");
     syncingCard.style.display = "";
     syncDoneCard.style.display = "none";
     syncProgressBar.style.width = "0%";
-
-    // Resolve list IDs (create new lists if needed)
-    var priorityListId = null;
-    var otherListId = null;
-
-    try {
-      if (hasPriority) {
-        syncStatusText.textContent = "Preparing priority task list…";
-        priorityListId = await resolveListId(listSelectPriority, newListInputPriority);
-      }
-      if (hasOther) {
-        syncStatusText.textContent = "Preparing other task list…";
-        otherListId = await resolveListId(listSelectOther, newListInputOther);
-      }
-    } catch(err) {
-      showToast("Failed to create list: " + err.message, "error");
-      updateStepper(3);
-      showSection("review");
-      return;
-    }
 
     // Sync only checked, unsynced tasks
     var unsyncedTasks = state.tasks.filter(function(t) { return t.checked && !t.synced && t.title.trim(); });
@@ -2389,6 +2466,51 @@
       }
       retryFailedBtn.style.display = "";
     }
+  }
+
+  listModalConfirm.addEventListener("click", async function() {
+    var hasPriority = modalPrioritySection.style.display !== "none";
+    var hasOther = modalOtherSection.style.display !== "none";
+
+    // Validate: each visible section needs a list selected or new name
+    if (hasPriority && !listSelectPriority.value && !newListInputPriority.value.trim()) {
+      showToast("Please select or create a list for priority tasks", "error");
+      return;
+    }
+    if (hasOther && !listSelectOther.value && !newListInputOther.value.trim()) {
+      showToast("Please select or create a list for other tasks", "error");
+      return;
+    }
+
+    closeListModal();
+
+    // Resolve list IDs (create new lists if needed)
+    var priorityListId = null;
+    var otherListId = null;
+
+    updateStepper(4);
+    showSection("sync");
+    syncingCard.style.display = "";
+    syncDoneCard.style.display = "none";
+    syncProgressBar.style.width = "0%";
+
+    try {
+      if (hasPriority) {
+        syncStatusText.textContent = "Preparing priority task list…";
+        priorityListId = await resolveListId(listSelectPriority, newListInputPriority);
+      }
+      if (hasOther) {
+        syncStatusText.textContent = "Preparing other task list…";
+        otherListId = await resolveListId(listSelectOther, newListInputOther);
+      }
+    } catch(err) {
+      showToast("Failed to create list: " + err.message, "error");
+      updateStepper(3);
+      showSection("review");
+      return;
+    }
+
+    await executeSyncTasks(priorityListId, otherListId);
   });
 
   // ========== RE-AUTH BUTTON ==========
