@@ -806,7 +806,7 @@
     </div>
     <div class="step-connector"></div>
     <div class="step-item" data-step="2">
-      <span class="step-num">2</span><span>Upload</span>
+      <span class="step-num">2</span><span>Input</span>
     </div>
     <div class="step-connector"></div>
     <div class="step-item" data-step="3">
@@ -895,9 +895,8 @@
     </div>
 
     <div class="card">
-      <div class="card-title">Upload Image</div>
-      <div class="card-desc">
-        Upload an image of a handwritten or printed to-do list.
+      <div style="font-size:13px; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.05em; margin-bottom:6px;">
+        Upload an image of a handwritten or printed to-do list
       </div>
 
       <div class="upload-zone" id="uploadZone">
@@ -914,7 +913,7 @@
 
       <div class="smart-input-wrap" style="margin-top:16px;">
         <label style="font-size:13px; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.05em; display:block; margin-bottom:6px;">
-          <i class="fas fa-pen-fancy" style="margin-right:4px;"></i> Smart Input <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional)</span>
+          Smart Input <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional)</span>
         </label>
         <div class="smart-input-box" id="smartInputBox">
           <textarea id="smartTextInput" placeholder="Type a task or instruction, and / or paste an image" rows="2"></textarea>
@@ -938,7 +937,7 @@
 
       <label id="liteModeLabel" style="display:flex; align-items:center; gap:10px; margin-top:14px; cursor:pointer; padding:10px 12px; background:var(--accent-light); border-radius:var(--radius-sm); font-size:14px; font-weight:600; color:var(--accent);">
         <input type="checkbox" id="liteModeCheck" checked style="width:18px; height:18px; accent-color:var(--accent); cursor:pointer;">
-        <span><i class="fas fa-bolt" style="margin-right:4px;"></i> Lite mode — sync priority tasks only, skip review</span>
+        <span><i class="fas fa-bolt" style="margin-right:4px;"></i> Lite mode — sync quiz and dictation tasks only, skip review</span>
       </label>
     </div>
   </div>
@@ -2889,7 +2888,10 @@
       var data = await resp.json();
       state.lists = data.value || [];
       populateListSelect(listSelectPriority, state.lists, "Theo Quiz and Dictation");
-      populateListSelect(listSelectOther, state.lists, "Theo Homework");
+      // Default "Other" list to "Household Tasks" if any event tasks, otherwise "Theo Homework"
+      var hasEventTasks = state.tasks.some(function(t) { return t.isEvent && t.checked && !t.synced; });
+      var otherDefault = hasEventTasks ? "Household Tasks" : "Theo Homework";
+      populateListSelect(listSelectOther, state.lists, otherDefault);
     } catch(err) {
       var errHtml2 = '<option value="">Error loading lists</option>';
       listSelectPriority.innerHTML = errHtml2;
