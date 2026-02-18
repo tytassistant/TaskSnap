@@ -1862,7 +1862,12 @@
     if (liteModeCheck.checked) {
       var priTasks = state.tasks.filter(function(t) { return t.priority; });
       if (priTasks.length === 0) {
-        // No priority tasks found — fall through to normal review
+        // No priority tasks found — switch to review section properly
+        // Check all tasks so user can choose which to sync
+        state.tasks.forEach(function(t) { t.checked = true; });
+        updateStepper(3);
+        showSection("review");
+        extractionLoading.style.display = "none";
         showToast("No priority tasks found. Showing full review.", "info");
         renderPhotoDate();
         renderTasks();
