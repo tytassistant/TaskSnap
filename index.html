@@ -880,7 +880,7 @@
         <div class="hint">Not saved — you&rsquo;ll re-enter it each session. Uses your Poe subscription points.</div>
       </div>
       <button class="btn btn-block" id="continueToUploadBtn" type="button" style="display:none; margin-top:12px; background:var(--accent); color:#fff;">
-        <i class="fas fa-arrow-right" style="margin-right:6px;"></i> Continue to Upload
+        <i class="fas fa-arrow-right" style="margin-right:6px;"></i> Continue to input
       </button>
     </div>
   </div>
@@ -1859,7 +1859,8 @@
 
   // ========== PRIORITY DETECTION ==========
   var PRIORITY_KEYWORDS = [
-    "quiz", "exam", "測", "小測", "考試",
+    "quiz", "exam", "test", "assessment",
+    "測", "小測", "測驗", "考", "考試", "口試",
     "dict", "dictation", "默", "默書"
   ];
 
@@ -1876,19 +1877,22 @@
   // ========== EXTRACT TASKS WITH LLM ==========
   // Store user instruction text for later inclusion in task notes
   var lastUserInstruction = "";
+  // Track input mode at extraction time for Lite Mode decisions
+  var lastInputHadText = false;
 
   extractBtn.addEventListener("click", function() {
     var hasPhoto = !!state.photoDataUrl;
     var userText = smartTextInput.value.trim();
     lastUserInstruction = userText;
+    lastInputHadText = !!userText;
 
     if (!hasPhoto && !userText) {
       showToast("Please upload an image or type a task", "error");
       return;
     }
 
-    if (liteModeCheck.checked && hasPhoto) {
-      // In lite mode with photo, show sync section with extracting status
+    if (liteModeCheck.checked) {
+      // In lite mode, show sync section with extracting status
       updateStepper(4);
       showSection("sync");
       syncingCard.style.display = "";
@@ -1926,7 +1930,7 @@
       "",
       "3. SUBJECT GROUPING: Tasks in the photo are often grouped by subject using abbreviations like M (Maths), E (English), 中 (Chinese), 音 (Music), 人 (Liberal Studies/人文), Sci (Science), etc. When multiple tasks fall under the same subject heading, the subject is written once and sub-tasks are indented with numbers, bullets, or *. You MUST prefix EVERY task title with its subject in square brackets, e.g. \"[Maths] Complete worksheet p.12\" or \"[中文] 默書溫習\". Always include the subject prefix even for the first task under a heading.",
       "",
-      "4. PRIORITY DETECTION: For each task, determine if it is a priority task. A task is priority if its title or content relates to any of these keywords (case-insensitive): quiz, exam, 測, 小測, 考試, dict, dictation, 默, 默書. Set \"priority\" to true for these tasks, false otherwise.",
+      "4. PRIORITY DETECTION: For each task, determine if it is a priority task. A task is priority if its title or content relates to any of these keywords (case-insensitive): quiz, exam, test, assessment, 測, 小測, 測驗, 考, 考試, 口試, dict, dictation, 默, 默書. Set \"priority\" to true for these tasks, false otherwise.",
       "",
       "5. DATE PARSING — CRITICAL: Dates in the image may appear in various formats. You MUST convert them accurately to YYYY-MM-DDTHH:mm:ss. Common formats include:",
       "   - Chinese dates: 6月5日, 六月五日, 6/5, 12月20日",
@@ -1934,7 +1938,7 @@
       "   - With year: 2025年6月5日, 2025/6/5",
       "   - Without year: assume the current or next occurrence based on context",
       "   - If only a date is given with no time, default the time to 09:00:00",
-      "   - For priority tasks (quiz/exam/dictation), pay EXTRA attention to correctly reading the due date — these dates are critical.",
+      "   - For priority tasks (quiz/exam/test/assessment/dictation), pay EXTRA attention to correctly reading the due date — these dates are critical.",
       "",
       "Return JSON:",
       '{',
@@ -1975,13 +1979,23 @@
 
     // Text-only prompt (no image)
     var textOnlyPromptLines = [
-      "The user wants to create a task based on the following natural language input. Today's date is " + todayDate + ".",
+      "The user wants to create tasks based on the following natural language input. Today's date is " + todayDate + ".",
+      "",
+      "=== STEP 1: CLASSIFY THE INPUT ===",
+      "Determine if this input is:",
+      "- \"text_task\": a regular task, homework, assignment, reminder, or thing to do",
+      "- \"event\": a request to register for an event, competition, workshop, activity, or similar event (look for keywords like 'register', 'sign up', 'enrol', 'enroll', '報名')",
+      "",
+      "=== STEP 2: EXTRACT BASED ON TYPE ===",
+      "",
+      '--- If type is "text_task" ---',
       "Parse the user's text and extract:",
       "- A clear task title",
       "- A due date/time if mentioned (interpret relative dates like 'tonight' = today 21:00, 'tomorrow' = next day 09:00, 'in two days' = 2 days from today 09:00, 'next Friday' = the coming Friday 09:00, etc.)",
       "- Any additional notes/details",
+      "- PRIORITY DETECTION: A task is priority if its title or content relates to any of these keywords (case-insensitive): quiz, exam, test, assessment, 測, 小測, 測驗, 考, 考試, 口試, dict, dictation, 默, 默書. Set \"priority\" to true for these tasks, false otherwise.",
       "",
-      "Return ONLY a valid JSON object:",
+      "Return JSON:",
       '{',
       '  "type": "text_task",',
       '  "tasks": [',
@@ -1989,12 +2003,30 @@
       '      "title": "string",',
       '      "body": "string (additional details; empty string if none)",',
       '      "dueDateTime": "YYYY-MM-DDTHH:mm:ss" or null,',
-      '      "priority": false',
+      '      "priority": true or false',
       '    }',
       '  ]',
       '}',
       "The user may describe one or multiple tasks. Extract all of them.",
-      "Return ONLY the JSON object (no other text, no markdown code blocks)."
+      "",
+      '--- If type is "event" ---',
+      "Extract the following:",
+      "- eventName: The name/title of the event",
+      "- registrationDeadline: The deadline/closing date for registration in YYYY-MM-DD format. null if not mentioned.",
+      "- registrationMethod: How to register — include any URL, email, or description. Empty string if not mentioned.",
+      "- taskDueDateTime: If the user specifies WHEN the task should be due (e.g. 'in two days', 'tonight', 'by Friday'), compute it as YYYY-MM-DDTHH:mm:ss based on today's date. If not specified, set to null.",
+      "",
+      "Return JSON:",
+      '{',
+      '  "type": "event",',
+      '  "eventName": "string",',
+      '  "registrationDeadline": "YYYY-MM-DD" or null,',
+      '  "registrationMethod": "string or empty string",',
+      '  "taskDueDateTime": "YYYY-MM-DDTHH:mm:ss" or null',
+      '}',
+      "",
+      "=== IMPORTANT ===",
+      "Return ONLY a valid JSON object (no other text, no markdown code blocks)."
     ];
 
     // Determine which prompt and content to send
@@ -2201,12 +2233,21 @@
 
     showPhotoThumbnail();
 
-    // ===== LITE MODE: skip review, sync priority tasks directly =====
+    // ===== LITE MODE =====
     if (liteModeCheck.checked) {
+      if (lastInputHadText) {
+        // Text-only or photo+text: sync ALL tasks to their respective categories
+        state.tasks.forEach(function(t) { t.checked = true; });
+        var syncCount = state.tasks.filter(function(t) { return t.title.trim(); }).length;
+        showToast("Lite mode: syncing " + syncCount + " task" + (syncCount > 1 ? "s" : "") + "…", "success");
+        liteModeSync(true);
+        return;
+      }
+
+      // Photo only
       var priTasks = state.tasks.filter(function(t) { return t.priority; });
       if (priTasks.length === 0) {
-        // No priority tasks found — switch to review section properly
-        // Check all tasks so user can choose which to sync
+        // No priority tasks found — fall back to manual review
         state.tasks.forEach(function(t) { t.checked = true; });
         updateStepper(3);
         showSection("review");
@@ -2219,12 +2260,11 @@
         return;
       }
 
+      // Photo only with priority tasks: sync priority only
       var priCount = priTasks.length;
       var totalCount = state.tasks.length;
       showToast("Lite mode: " + priCount + " priority task" + (priCount > 1 ? "s" : "") + " of " + totalCount + " total — syncing now…", "success");
-
-      // Fetch lists and find the default priority list
-      liteModeSyncPriority();
+      liteModeSync(false);
       return;
     }
 
@@ -2305,7 +2345,15 @@
 
     showPhotoThumbnail();
 
-    // Always go to manual review for events (bypass lite mode)
+    // Lite Mode check for events
+    if (liteModeCheck.checked && lastInputHadText) {
+      // Text input present → auto-sync event
+      showToast("Lite mode: syncing event task — \"" + eventName + "\"…", "success");
+      liteModeSync(true);
+      return;
+    }
+
+    // Normal: manual review (photo-only events, or Lite Mode off)
     updateStepper(3);
     showSection("review");
     renderPhotoDate();
@@ -2317,17 +2365,46 @@
 
   // ========== LITE MODE SYNC ==========
   var LITE_PRIORITY_LIST_NAME = "Theo Quiz and Dictation";
+  var LITE_OTHER_LIST_NAME = "Theo Homework";
+  var LITE_EVENT_LIST_NAME = "Household Tasks";
 
-  async function liteModeSyncPriority() {
+  // Helper: find a list by name or create it
+  async function findOrCreateList(lists, listName) {
+    for (var i = 0; i < lists.length; i++) {
+      if (lists[i].displayName.toLowerCase() === listName.toLowerCase()) {
+        return lists[i].id;
+      }
+    }
+    // Not found — create it
+    syncStatusText.textContent = "Creating \"" + listName + "\" list…";
+    var token = await getAccessToken();
+    var resp = await fetch("https://graph.microsoft.com/v1.0/me/todo/lists", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + token,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ displayName: listName })
+    });
+    if (!resp.ok) {
+      var detail = await parseGraphError(resp);
+      throw new Error(formatGraphError(detail));
+    }
+    var newList = await resp.json();
+    return newList.id;
+  }
+
+  // syncAll=true: sync ALL checked tasks (priority → priority list, other → other list)
+  // syncAll=false: sync only priority tasks (other tasks ignored)
+  async function liteModeSync(syncAll) {
     updateStepper(4);
     showSection("sync");
     syncingCard.style.display = "";
     syncDoneCard.style.display = "none";
     syncProgressBar.style.width = "0%";
-    syncStatusText.textContent = "Finding task list…";
+    syncStatusText.textContent = "Finding task lists…";
 
     try {
-      // Fetch task lists
       var token = await getAccessToken();
       var resp = await fetch("https://graph.microsoft.com/v1.0/me/todo/lists", {
         headers: { Authorization: "Bearer " + token }
@@ -2339,37 +2416,27 @@
       var data = await resp.json();
       var lists = data.value || [];
 
-      // Find the default priority list by name
       var priorityListId = null;
-      for (var i = 0; i < lists.length; i++) {
-        if (lists[i].displayName.toLowerCase() === LITE_PRIORITY_LIST_NAME.toLowerCase()) {
-          priorityListId = lists[i].id;
-          break;
-        }
+      var otherListId = null;
+
+      // Determine which types of tasks need syncing
+      var checkedTasks = state.tasks.filter(function(t) { return t.checked && !t.synced && t.title.trim(); });
+      var hasPriority = checkedTasks.some(function(t) { return t.priority; });
+      var hasOther = checkedTasks.some(function(t) { return !t.priority; });
+
+      // Find/create priority list if needed
+      if (hasPriority) {
+        priorityListId = await findOrCreateList(lists, LITE_PRIORITY_LIST_NAME);
       }
 
-      if (!priorityListId) {
-        // List not found — create it
-        syncStatusText.textContent = "Creating \"" + LITE_PRIORITY_LIST_NAME + "\" list…";
-        var createToken = await getAccessToken();
-        var createResp = await fetch("https://graph.microsoft.com/v1.0/me/todo/lists", {
-          method: "POST",
-          headers: {
-            Authorization: "Bearer " + createToken,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({ displayName: LITE_PRIORITY_LIST_NAME })
-        });
-        if (!createResp.ok) {
-          var createDetail = await parseGraphError(createResp);
-          throw new Error(formatGraphError(createDetail));
-        }
-        var newList = await createResp.json();
-        priorityListId = newList.id;
+      // Find/create other list if needed (only in syncAll mode)
+      if (syncAll && hasOther) {
+        var hasEvents = checkedTasks.some(function(t) { return t.isEvent; });
+        var otherName = hasEvents ? LITE_EVENT_LIST_NAME : LITE_OTHER_LIST_NAME;
+        otherListId = await findOrCreateList(lists, otherName);
       }
 
-      // Execute sync — only priority tasks are checked
-      await executeSyncTasks(priorityListId, null);
+      await executeSyncTasks(priorityListId, otherListId);
     } catch(err) {
       showToast("Lite mode sync failed: " + err.message, "error");
       // Fall back to review section
@@ -2464,7 +2531,7 @@
   function renderTasks() {
     taskList.innerHTML = "";
     if (state.tasks.length === 0) {
-      taskList.innerHTML = '<div class="empty-state"><i class="fas fa-clipboard-list"></i><p>No tasks yet. Add tasks manually or go back to upload another image.</p></div>';
+      taskList.innerHTML = '<div class="empty-state"><i class="fas fa-clipboard-list"></i><p>No tasks yet. Add tasks manually or go back to input.</p></div>';
       return;
     }
 
@@ -3176,6 +3243,7 @@
     smartPasteImg.src = "";
     smartPastePreview.style.display = "none";
     lastUserInstruction = "";
+    lastInputHadText = false;
     extractBtn.disabled = true;
     taskList.innerHTML = "";
     newListInputPriority.value = "";
