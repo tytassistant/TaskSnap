@@ -757,8 +757,8 @@
       </div>
 
       <div class="field" style="margin-top:16px;">
-        <label>Application (Client) ID</label>
-        <input type="text" id="clientIdInput" placeholder="e.g. 12345678-abcd-1234-abcd-1234567890ab" autocomplete="off">
+        <label>Azure App Client ID <span style="font-weight:400; text-transform:none; letter-spacing:0;">(not a login)</span></label>
+        <input type="text" id="clientIdInput" name="azure_client_id" placeholder="e.g. 12345678-abcd-1234-abcd-1234567890ab" autocomplete="one-time-code" data-form-type="other" data-lpignore="true">
         <div class="hint">Found in Azure AD &gt; App registrations &gt; Overview</div>
       </div>
 
@@ -775,9 +775,10 @@
       <div class="card-desc">
         Used for AI-powered task extraction from your photos. Get your key from <a href="https://poe.com/api_key" target="_blank" rel="noopener"><strong>poe.com/api_key</strong></a>.
       </div>
-      <div class="field">
-        <input type="password" id="poeApiKeyInput" placeholder="Enter your Poe API key" autocomplete="off" style="font-size:16px;">
-        <div class="hint">Stored locally in your browser. Uses your Poe subscription points.</div>
+      <div class="field" style="position:relative;">
+        <input type="password" id="poeApiKeyInput" name="poe_api_token" placeholder="Enter your Poe API key" autocomplete="current-password" style="font-size:16px; padding-right:44px;">
+        <button type="button" id="togglePoeKeyBtn" style="position:absolute; right:10px; top:28px; background:none; border:none; color:var(--text-tertiary); cursor:pointer; font-size:15px; padding:4px;" title="Show/hide key"><i class="fas fa-eye"></i></button>
+        <div class="hint">Not saved — you&rsquo;ll re-enter it each session. Uses your Poe subscription points.</div>
       </div>
     </div>
   </div>
@@ -1134,6 +1135,13 @@
   instrToggle.addEventListener("click", function() {
     instrToggle.classList.toggle("expanded");
     instrBody.classList.toggle("show");
+  });
+
+  // ========== POE KEY VISIBILITY TOGGLE ==========
+  $id("togglePoeKeyBtn").addEventListener("click", function() {
+    var isPassword = poeApiKeyInput.type === "password";
+    poeApiKeyInput.type = isPassword ? "text" : "password";
+    this.querySelector("i").className = isPassword ? "fas fa-eye-slash" : "fas fa-eye";
   });
 
   // ========== GRAPH API ERROR PARSER ==========
@@ -2117,14 +2125,21 @@
     if (e.target === listModal) { closeListModal(); }
   });
 
-  function populateListSelect(selectEl, lists) {
+  function populateListSelect(selectEl, lists, defaultName) {
     selectEl.innerHTML = "";
-    lists.forEach(function(list) {
+    var matchedIdx = -1;
+    lists.forEach(function(list, i) {
       var opt = document.createElement("option");
       opt.value = list.id;
       opt.textContent = list.displayName;
       selectEl.appendChild(opt);
+      if (defaultName && list.displayName.toLowerCase() === defaultName.toLowerCase()) {
+        matchedIdx = i;
+      }
     });
+    if (matchedIdx !== -1) {
+      selectEl.selectedIndex = matchedIdx;
+    }
     if (lists.length === 0) {
       selectEl.innerHTML = '<option value="">No lists found</option>';
     }
@@ -2153,8 +2168,8 @@
       }
       var data = await resp.json();
       state.lists = data.value || [];
-      populateListSelect(listSelectPriority, state.lists);
-      populateListSelect(listSelectOther, state.lists);
+      populateListSelect(listSelectPriority, state.lists, "Theo Quiz and Dictation");
+      populateListSelect(listSelectOther, state.lists, "Theo Homework");
     } catch(err) {
       var errHtml2 = '<option value="">Error loading lists</option>';
       listSelectPriority.innerHTML = errHtml2;
