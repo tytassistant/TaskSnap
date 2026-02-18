@@ -502,6 +502,38 @@
     border: none; cursor: pointer; padding: 2px 6px;
   }
   .cal-clear-btn:hover { text-decoration: underline; }
+
+  .smart-input-box {
+    border: 1.5px dashed var(--border-strong);
+    border-radius: var(--radius-md);
+    background: var(--bg-card-hover);
+    transition: border-color var(--transition);
+    overflow: hidden;
+  }
+  .smart-input-box:focus-within { border-color: var(--accent); }
+  .smart-input-box textarea {
+    width: 100%; border: none; background: transparent;
+    padding: 12px 14px; font-family: 'Bricolage Grotesque', sans-serif;
+    font-size: 16px; color: var(--text-primary);
+    resize: vertical; min-height: 60px; outline: none;
+    line-height: 1.5;
+  }
+  .smart-input-box textarea::placeholder { color: var(--text-tertiary); font-size: 14px; }
+  #smartPastePreview {
+    position: relative; padding: 8px 14px 12px;
+    border-top: 1px solid var(--border);
+  }
+  #smartPastePreview img {
+    max-width: 120px; max-height: 90px; border-radius: 8px;
+    object-fit: cover; border: 1px solid var(--border);
+  }
+  #smartPasteRemove {
+    position: absolute; top: 4px; left: 126px;
+    width: 22px; height: 22px; border-radius: 50%;
+    background: var(--danger); color: #fff; border: none;
+    font-size: 11px; cursor: pointer; display: flex;
+    align-items: center; justify-content: center;
+  }
   .task-actions { display: flex; gap: 6px; }
   .task-remove {
     width: 28px; height: 28px; border-radius: 6px;
@@ -880,6 +912,20 @@
         <button class="remove-img" id="removeImgBtn" type="button"><i class="fas fa-xmark"></i></button>
       </div>
 
+      <div class="smart-input-wrap" style="margin-top:16px;">
+        <label style="font-size:13px; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.05em; display:block; margin-bottom:6px;">
+          <i class="fas fa-pen-fancy" style="margin-right:4px;"></i> Smart Input <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional)</span>
+        </label>
+        <div class="smart-input-box" id="smartInputBox">
+          <textarea id="smartTextInput" placeholder="Type a task or instruction… e.g. &#10;• remind me to pay tuition fee tonight&#10;• register for this event in two days&#10;&#10;You can also paste an image here (Ctrl+V)" rows="3"></textarea>
+          <div id="smartPastePreview" style="display:none;">
+            <img id="smartPasteImg" alt="Pasted image">
+            <button type="button" id="smartPasteRemove" title="Remove pasted image"><i class="fas fa-xmark"></i></button>
+          </div>
+        </div>
+        <div class="hint" style="margin-top:4px;">Works alone or alongside a photo — text guides how the AI interprets the image.</div>
+      </div>
+
       <div class="tz-row" style="margin-top:18px;">
         <div class="field">
           <label>Timezone for due dates</label>
@@ -1128,6 +1174,10 @@
   var uploadPreview = $id("uploadPreview");
   var previewImg = $id("previewImg");
   var removeImgBtn = $id("removeImgBtn");
+  var smartTextInput = $id("smartTextInput");
+  var smartPastePreview = $id("smartPastePreview");
+  var smartPasteImg = $id("smartPasteImg");
+  var smartPasteRemove = $id("smartPasteRemove");
   var timezoneSelect = $id("timezoneSelect");
   var extractBtn = $id("extractBtn");
   var liteModeCheck = $id("liteModeCheck");
@@ -1638,7 +1688,7 @@
       previewImg.src = e.target.result;
       uploadPreview.style.display = "block";
       uploadZone.style.display = "none";
-      extractBtn.disabled = false;
+      updateExtractBtnState();
     };
     reader.readAsDataURL(file);
   }
@@ -1650,7 +1700,67 @@
     uploadPreview.style.display = "none";
     uploadZone.style.display = "";
     imageInput.value = "";
-    extractBtn.disabled = true;
+    updateExtractBtnState();
+  });
+
+  // ========== SMART INPUT (text + paste image) ==========
+  // State for pasted image (separate from uploaded photo)
+  var smartPasteDataUrl = null;
+
+  function updateExtractBtnState() {
+    // Enable if there's a photo, a pasted image, or text
+    var hasPhoto = !!state.uploadedFile;
+    var hasPaste = !!smartPasteDataUrl;
+    var hasText = smartTextInput.value.trim().length > 0;
+    extractBtn.disabled = !(hasPhoto || hasPaste || hasText);
+  }
+
+  smartTextInput.addEventListener("input", updateExtractBtnState);
+
+  // Handle paste events on the textarea
+  smartTextInput.addEventListener("paste", function(e) {
+    var items = e.clipboardData && e.clipboardData.items;
+    if (!items) { return; }
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].type.indexOf("image") !== -1) {
+        e.preventDefault();
+        var file = items[i].getAsFile();
+        if (!file) { continue; }
+        var reader = new FileReader();
+        reader.onload = function(ev) {
+          smartPasteDataUrl = ev.target.result;
+          smartPasteImg.src = ev.target.result;
+          smartPastePreview.style.display = "";
+          // If no photo uploaded yet, also use pasted image as the main photo
+          if (!state.uploadedFile) {
+            state.uploadedFile = file;
+            state.photoDataUrl = ev.target.result;
+            previewImg.src = ev.target.result;
+            uploadPreview.style.display = "block";
+            uploadZone.style.display = "none";
+          }
+          updateExtractBtnState();
+        };
+        reader.readAsDataURL(file);
+        break; // Only handle first image
+      }
+    }
+  });
+
+  smartPasteRemove.addEventListener("click", function() {
+    // If the pasted image was also used as the main photo, clear that too
+    if (smartPasteDataUrl && state.photoDataUrl === smartPasteDataUrl) {
+      state.uploadedFile = null;
+      state.photoDataUrl = null;
+      previewImg.src = "";
+      uploadPreview.style.display = "none";
+      uploadZone.style.display = "";
+      imageInput.value = "";
+    }
+    smartPasteDataUrl = null;
+    smartPasteImg.src = "";
+    smartPastePreview.style.display = "none";
+    updateExtractBtnState();
   });
 
   // ========== DATE HELPERS ==========
@@ -1766,19 +1876,27 @@
   }
 
   // ========== EXTRACT TASKS WITH LLM ==========
+  // Store user instruction text for later inclusion in task notes
+  var lastUserInstruction = "";
+
   extractBtn.addEventListener("click", function() {
-    if (!state.uploadedFile) {
-      showToast("Please upload an image first", "error");
+    var hasPhoto = !!state.photoDataUrl;
+    var userText = smartTextInput.value.trim();
+    lastUserInstruction = userText;
+
+    if (!hasPhoto && !userText) {
+      showToast("Please upload an image or type a task", "error");
       return;
     }
-    if (liteModeCheck.checked) {
-      // In lite mode, show sync section with extracting status
+
+    if (liteModeCheck.checked && hasPhoto) {
+      // In lite mode with photo, show sync section with extracting status
       updateStepper(4);
       showSection("sync");
       syncingCard.style.display = "";
       syncDoneCard.style.display = "none";
       syncProgressBar.style.width = "0%";
-      syncStatusText.textContent = "Extracting tasks from photo…";
+      syncStatusText.textContent = "Extracting tasks…";
     } else {
       updateStepper(3);
       showSection("review");
@@ -1788,7 +1906,11 @@
       reviewActions.style.display = "none";
     }
 
-    var promptText = [
+    // Build the prompt based on what inputs are provided
+    var todayDate = getTodayDate();
+
+    // Base vision prompt for images (todo list + event detection)
+    var imagePromptLines = [
       "Analyze this image carefully.",
       "",
       "=== STEP 1: CLASSIFY THE IMAGE ===",
@@ -1847,8 +1969,63 @@
       '}',
       "",
       "=== IMPORTANT ===",
-      "Return ONLY a valid JSON object (no other text, no markdown code blocks)."
-    ].join("\n");
+      "Return ONLY a valid JSON object (no other text, no markdown code blocks).",
+      "Today's date is: " + todayDate
+    ];
+
+    // Text-only prompt (no image)
+    var textOnlyPromptLines = [
+      "The user wants to create a task based on the following natural language input. Today's date is " + todayDate + ".",
+      "Parse the user's text and extract:",
+      "- A clear task title",
+      "- A due date/time if mentioned (interpret relative dates like 'tonight' = today 21:00, 'tomorrow' = next day 09:00, 'in two days' = 2 days from today 09:00, 'next Friday' = the coming Friday 09:00, etc.)",
+      "- Any additional notes/details",
+      "",
+      "Return ONLY a valid JSON object:",
+      '{',
+      '  "type": "text_task",',
+      '  "tasks": [',
+      '    {',
+      '      "title": "string",',
+      '      "body": "string (additional details; empty string if none)",',
+      '      "dueDateTime": "YYYY-MM-DDTHH:mm:ss" or null,',
+      '      "priority": false',
+      '    }',
+      '  ]',
+      '}',
+      "The user may describe one or multiple tasks. Extract all of them.",
+      "Return ONLY the JSON object (no other text, no markdown code blocks)."
+    ];
+
+    // Determine which prompt and content to send
+    var promptText;
+    var messageContent;
+
+    if (hasPhoto && userText) {
+      // MODE 1: Photo + text instruction
+      promptText = imagePromptLines.join("\n") +
+        "\n\n=== USER INSTRUCTION ===\n" +
+        "The user provided the following instruction alongside the image. Use it as your PRIMARY GUIDE for how to interpret the image and what tasks to create. " +
+        "The user's instruction takes priority over the default classification rules above.\n\n" +
+        "User says: \"" + userText + "\"";
+      messageContent = [
+        { type: "text", text: promptText },
+        { type: "image_url", image_url: { url: state.photoDataUrl } }
+      ];
+    } else if (hasPhoto) {
+      // MODE 2: Photo only (original behavior)
+      promptText = imagePromptLines.join("\n");
+      messageContent = [
+        { type: "text", text: promptText },
+        { type: "image_url", image_url: { url: state.photoDataUrl } }
+      ];
+    } else {
+      // MODE 3: Text only (no image)
+      promptText = textOnlyPromptLines.join("\n") + "\n\nUser input: \"" + userText + "\"";
+      messageContent = [
+        { type: "text", text: promptText }
+      ];
+    }
 
     var poeKey = getPoeApiKey();
     if (!poeKey) {
@@ -1859,7 +2036,7 @@
       return;
     }
 
-    // Call Poe OpenAI-compatible API with vision
+    // Call Poe OpenAI-compatible API
     (async function() {
       try {
         var poeResp = await fetch("https://api.poe.com/v1/chat/completions", {
@@ -1874,10 +2051,7 @@
             messages: [
               {
                 role: "user",
-                content: [
-                  { type: "text", text: promptText },
-                  { type: "image_url", image_url: { url: state.photoDataUrl } }
-                ]
+                content: messageContent
               }
             ]
           })
@@ -1965,7 +2139,7 @@
       return;
     }
 
-    // ===== TODO_LIST TYPE (default): existing logic =====
+    // ===== TODO_LIST or TEXT_TASK TYPE =====
     var tasksArr = [];
     try {
       if (parsed.tasks && Array.isArray(parsed.tasks)) {
@@ -2009,6 +2183,10 @@
       // Priority: trust LLM flag, but also double-check with local keyword match
       var titleStr = t.title || "Untitled task";
       var bodyStr = t.body || "";
+      // Prepend user instruction to body if provided
+      if (lastUserInstruction) {
+        bodyStr = (bodyStr ? bodyStr + "\n\n" : "") + "User note: " + lastUserInstruction;
+      }
       var pri = (t.priority === true) || isPriorityTask(titleStr, bodyStr);
       return {
         id: "task-" + Date.now() + "-" + i,
@@ -2087,13 +2265,16 @@
     // Reminder: 9pm of the task due date
     var reminderDateTime = dueDate + "T21:00:00.0000000";
 
-    // Build body/notes with registration info only
+    // Build body/notes with registration info and user instruction
     var bodyParts = [];
     if (regMethod) {
       bodyParts.push("Registration: " + regMethod);
     }
     if (deadline) {
       bodyParts.push("Registration deadline: " + deadline);
+    }
+    if (lastUserInstruction) {
+      bodyParts.push((bodyParts.length > 0 ? "\n" : "") + "User note: " + lastUserInstruction);
     }
 
     var taskBody = bodyParts.join("\n");
@@ -2971,10 +3152,17 @@
   newScanBtn.addEventListener("click", function() {
     state.tasks = [];
     state.uploadedFile = null;
+    state.photoDataUrl = null;
     previewImg.src = "";
     uploadPreview.style.display = "none";
     uploadZone.style.display = "";
     imageInput.value = "";
+    // Reset smart input
+    smartTextInput.value = "";
+    smartPasteDataUrl = null;
+    smartPasteImg.src = "";
+    smartPastePreview.style.display = "none";
+    lastUserInstruction = "";
     extractBtn.disabled = true;
     taskList.innerHTML = "";
     newListInputPriority.value = "";
