@@ -732,7 +732,7 @@
 
   <!-- ======= SECTION 1: AUTH ======= -->
   <div class="section visible" id="section-auth">
-    <div class="card">
+    <div class="card" id="msalCard">
       <div class="card-title">Connect to Microsoft</div>
       <div class="card-desc">
         Sign in with your Microsoft account to sync tasks to Microsoft&nbsp;To&nbsp;Do. Your session stays active for up to 90&nbsp;days.
@@ -770,6 +770,17 @@
       <div id="msalStatusMsg" style="text-align:center; margin-top:8px; font-size:13px; color:var(--text-secondary); display:none;"></div>
     </div>
 
+    <!-- Session restored banner (hidden by default, shown when MSAL auto-login restores session) -->
+    <div id="sessionRestoredBanner" class="card" style="display:none; border-left:4px solid var(--success); background:var(--success-light);">
+      <div style="display:flex; align-items:center; gap:10px;">
+        <i class="fas fa-circle-check" style="color:var(--success); font-size:20px;"></i>
+        <div>
+          <div style="font-weight:600; color:var(--text-primary); font-size:15px;">Microsoft session active</div>
+          <div id="sessionRestoredUser" style="font-size:13px; color:var(--text-secondary); margin-top:2px;">Signed in — enter your Poe API key below to continue.</div>
+        </div>
+      </div>
+    </div>
+
     <div class="card">
       <div class="card-title" style="font-size:16px;"><i class="fas fa-robot" style="margin-right:6px;"></i> Poe API Key</div>
       <div class="card-desc">
@@ -780,6 +791,9 @@
         <button type="button" id="togglePoeKeyBtn" style="position:absolute; right:10px; top:28px; background:none; border:none; color:var(--text-tertiary); cursor:pointer; font-size:15px; padding:4px;" title="Show/hide key"><i class="fas fa-eye"></i></button>
         <div class="hint">Not saved — you&rsquo;ll re-enter it each session. Uses your Poe subscription points.</div>
       </div>
+      <button class="btn btn-block" id="continueToUploadBtn" type="button" style="display:none; margin-top:12px; background:var(--accent); color:#fff;">
+        <i class="fas fa-arrow-right" style="margin-right:6px;"></i> Continue to Upload
+      </button>
     </div>
   </div>
 
@@ -1043,12 +1057,16 @@
   // ========== DOM REFS ==========
   var $id = function(id) { return document.getElementById(id); };
 
+  var msalCard = $id("msalCard");
   var instrToggle = $id("instrToggle");
   var instrBody = $id("instrBody");
   var clientIdInput = $id("clientIdInput");
   var msalLoginBtn = $id("msalLoginBtn");
   var msalStatusMsg = $id("msalStatusMsg");
   var poeApiKeyInput = $id("poeApiKeyInput");
+  var continueToUploadBtn = $id("continueToUploadBtn");
+  var sessionRestoredBanner = $id("sessionRestoredBanner");
+  var sessionRestoredUser = $id("sessionRestoredUser");
   var uploadZone = $id("uploadZone");
   var imageInput = $id("imageInput");
   var uploadPreview = $id("uploadPreview");
@@ -1375,6 +1393,17 @@
     }
   });
 
+  // ========== CONTINUE BUTTON (after session restored) ==========
+  continueToUploadBtn.addEventListener("click", function() {
+    var poeKey = getPoeApiKey();
+    if (!poeKey) {
+      showToast("Please enter your Poe API key", "error");
+      return;
+    }
+    updateStepper(2);
+    showSection("upload");
+  });
+
   // ========== AUTO-LOGIN ON PAGE LOAD ==========
   async function tryAutoLogin() {
     loadSavedSettings();
@@ -1406,11 +1435,25 @@
 
       startTokenExpiryTracker();
       hideMsalStatus();
-      updateStepper(2);
-      showSection("upload");
 
       var displayName = state.userInfo ? (state.userInfo.displayName || state.userInfo.mail || "User") : "User";
-      showToast("Welcome back, " + displayName, "success");
+
+      // Check if Poe API key is already filled (e.g. from password manager autofill)
+      var poeKey = getPoeApiKey();
+      if (poeKey) {
+        // Both Microsoft session and Poe key are ready — go straight to upload
+        updateStepper(2);
+        showSection("upload");
+        showToast("Welcome back, " + displayName, "success");
+      } else {
+        // Microsoft session restored but no Poe API key — stay on auth page
+        // Hide the Microsoft card, show session restored banner, show continue button
+        msalCard.style.display = "none";
+        sessionRestoredBanner.style.display = "";
+        sessionRestoredUser.textContent = "Signed in as " + displayName + " — enter your Poe API key below to continue.";
+        continueToUploadBtn.style.display = "";
+        showToast("Welcome back, " + displayName + ". Please enter your Poe API key.", "success");
+      }
     } catch(err) {
       hideMsalStatus();
       state.msalInstance = null;
@@ -1457,6 +1500,10 @@
     state.uploadedFile = null;
     state.msalInstance = null;
     stopTokenExpiryTracker();
+    // Restore auth section to default state
+    msalCard.style.display = "";
+    sessionRestoredBanner.style.display = "none";
+    continueToUploadBtn.style.display = "none";
     updateStepper(1);
     showSection("auth");
     showToast("Signed out", "info");
