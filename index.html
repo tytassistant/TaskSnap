@@ -1733,7 +1733,16 @@
     }
 
     var promptText = [
-      "Analyze this image of a to-do list carefully.",
+      "Analyze this image carefully.",
+      "",
+      "=== STEP 1: CLASSIFY THE IMAGE ===",
+      "Determine if this image is:",
+      '- "todo_list": a handwritten or printed list of homework tasks, assignments, or things to do',
+      '- "event": an event flier, event poster, event summary email/webpage, registration notice, competition announcement, workshop notice, or similar event information',
+      "",
+      "=== STEP 2: EXTRACT BASED ON TYPE ===",
+      "",
+      '--- If type is "todo_list" ---',
       "",
       "1. PHOTO DATE: Look at the top-left area of the image for a date (the photo date / header date). Extract it as photoDate in YYYY-MM-DD format. If no date is found, set photoDate to null.",
       "",
@@ -1751,20 +1760,38 @@
       "   - If only a date is given with no time, default the time to 09:00:00",
       "   - For priority tasks (quiz/exam/dictation), pay EXTRA attention to correctly reading the due date — these dates are critical.",
       "",
-      "Return ONLY a valid JSON object (no other text or markdown) with this exact structure:",
+      "Return JSON:",
       '{',
+      '  "type": "todo_list",',
       '  "photoDate": "YYYY-MM-DD" or null,',
       '  "tasks": [',
       '    {',
-      '      "title": "string (the task title/name)",',
-      '      "body": "string (any additional details, notes, or sub-items; empty string if none)",',
-      '      "dueDateTime": "YYYY-MM-DDTHH:mm:ss" or null if no date visible for this task,',
+      '      "title": "string",',
+      '      "body": "string (additional details; empty string if none)",',
+      '      "dueDateTime": "YYYY-MM-DDTHH:mm:ss" or null,',
       '      "priority": true or false',
       '    }',
       '  ]',
       '}',
       "If a task is already marked as done/completed in the image, still include it but prepend [DONE] to the title.",
-      "Return only the JSON object."
+      "",
+      '--- If type is "event" ---',
+      "",
+      "Extract the following from the event flier/email/webpage:",
+      "- eventName: The name/title of the event (e.g. \"Math Olympiad 2026\", \"School Science Fair\")",
+      "- registrationDeadline: The deadline/closing date for registration, in YYYY-MM-DD format. Look for phrases like \"register by\", \"deadline\", \"closing date\", \"報名截止\", \"截止日期\". null if not found.",
+      "- registrationMethod: How to register — include any URL links, email addresses, QR code mentions, form names, or description of the registration process. Combine all relevant info into one string. Empty string if not found.",
+      "",
+      "Return JSON:",
+      '{',
+      '  "type": "event",',
+      '  "eventName": "string",',
+      '  "registrationDeadline": "YYYY-MM-DD" or null,',
+      '  "registrationMethod": "string or empty string"',
+      '}',
+      "",
+      "=== IMPORTANT ===",
+      "Return ONLY a valid JSON object (no other text, no markdown code blocks)."
     ].join("\n");
 
     var poeKey = getPoeApiKey();
@@ -1829,6 +1856,59 @@
     })();
   });
 
+  // Helper: get today's date as YYYY-MM-DD in local time
+  function getTodayDate() {
+    var d = new Date();
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  }
+
+  // Helper: get previous day as YYYY-MM-DD
+  function getPreviousDay(dateStr) {
+    var parts = dateStr.split("-");
+    var d = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+    d.setDate(d.getDate() - 1);
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  }
+
+  // Helper: compute reminder DateTimes for an event task
+  // Returns array of { dateTime: "YYYY-MM-DDTHH:mm:ss.0000000", label: "description" }
+  function computeEventReminders(uploadDate, dueDate) {
+    var reminders = [];
+    // 9pm of upload date
+    reminders.push({ dateTime: uploadDate + "T21:00:00.0000000", label: "9:00 PM on upload day (" + uploadDate + ")" });
+    // 7:30am, 12:30pm, 6pm, 9pm of due date
+    reminders.push({ dateTime: dueDate + "T07:30:00.0000000", label: "7:30 AM on due date (" + dueDate + ")" });
+    reminders.push({ dateTime: dueDate + "T12:30:00.0000000", label: "12:30 PM on due date (" + dueDate + ")" });
+    reminders.push({ dateTime: dueDate + "T18:00:00.0000000", label: "6:00 PM on due date (" + dueDate + ")" });
+    reminders.push({ dateTime: dueDate + "T21:00:00.0000000", label: "9:00 PM on due date (" + dueDate + ")" });
+    // Deduplicate (upload 9pm might equal due 9pm if same day)
+    var seen = {};
+    var unique = [];
+    reminders.forEach(function(r) {
+      if (!seen[r.dateTime]) {
+        seen[r.dateTime] = true;
+        unique.push(r);
+      }
+    });
+    return unique;
+  }
+
+  // Helper: pick the best reminder to set via Graph API (earliest future one, or earliest overall)
+  function pickBestReminder(reminders) {
+    if (!reminders || reminders.length === 0) { return null; }
+    var now = new Date();
+    // Try to find the earliest future reminder
+    var future = reminders.filter(function(r) {
+      var dt = r.dateTime.replace(".0000000", "");
+      return new Date(dt) > now;
+    });
+    if (future.length > 0) {
+      return future[0].dateTime;
+    }
+    // All in the past — return the last one (most recent)
+    return reminders[reminders.length - 1].dateTime;
+  }
+
   function processExtractionResult(content) {
     extractionLoading.style.display = "none";
 
@@ -1839,21 +1919,42 @@
       jsonStr = match[1].trim();
     }
 
-    // Try to find a JSON object first, then fall back to array
+    // Try to find a JSON object
     var parsed = null;
-    var tasksArr = [];
     try {
-      // Try finding a JSON object { ... }
       var objStart = jsonStr.indexOf("{");
       var objEnd = jsonStr.lastIndexOf("}");
       if (objStart !== -1 && objEnd !== -1) {
         parsed = JSON.parse(jsonStr.substring(objStart, objEnd + 1));
       }
-      if (parsed && parsed.tasks && Array.isArray(parsed.tasks)) {
-        // New format: { photoDate, tasks }
+    } catch(err) {
+      parsed = null;
+    }
+
+    if (!parsed) {
+      showToast("Could not parse AI response. You can add tasks manually.", "error");
+      state.tasks = [];
+      state.photoDate = null;
+      renderPhotoDate();
+      renderTasks();
+      addTaskBtn.style.display = "";
+      reviewActions.style.display = "flex";
+      return;
+    }
+
+    // ===== EVENT TYPE: create a "Register for..." task =====
+    if (parsed.type === "event") {
+      processEventResult(parsed);
+      return;
+    }
+
+    // ===== TODO_LIST TYPE (default): existing logic =====
+    var tasksArr = [];
+    try {
+      if (parsed.tasks && Array.isArray(parsed.tasks)) {
         state.photoDate = parsed.photoDate || null;
         tasksArr = parsed.tasks;
-      } else if (parsed && Array.isArray(parsed)) {
+      } else if (Array.isArray(parsed)) {
         tasksArr = parsed;
       } else {
         // Fall back to finding array directly
@@ -1946,6 +2047,68 @@
       showToast("No tasks found in the image. You can add tasks manually.", "info");
     }
 
+    addTaskBtn.style.display = "";
+    reviewActions.style.display = "flex";
+  }
+
+  // ========== EVENT RESULT PROCESSING ==========
+  function processEventResult(parsed) {
+    var eventName = (parsed.eventName || "Unknown Event").trim();
+    var deadline = parsed.registrationDeadline || null; // YYYY-MM-DD or null
+    var regMethod = (parsed.registrationMethod || "").trim();
+    var uploadDate = getTodayDate();
+
+    // Calculate due date: 9pm on the day BEFORE the deadline, or 9pm on upload date
+    var dueDate;
+    if (deadline && /^\d{4}-\d{2}-\d{2}$/.test(deadline)) {
+      dueDate = getPreviousDay(deadline);
+    } else {
+      dueDate = uploadDate;
+    }
+    var dueDateTimeStr = dueDate + "T21:00:00";
+
+    // Compute reminders
+    var reminders = computeEventReminders(uploadDate, dueDate);
+
+    // Build body/notes with registration info and reminder schedule
+    var bodyParts = [];
+    if (regMethod) {
+      bodyParts.push("Registration: " + regMethod);
+    }
+    if (deadline) {
+      bodyParts.push("Registration deadline: " + deadline);
+    }
+    bodyParts.push("");
+    bodyParts.push("Reminder schedule:");
+    reminders.forEach(function(r) {
+      bodyParts.push("  \u2022 " + r.label);
+    });
+    bodyParts.push("(Note: Microsoft To Do supports 1 reminder — the earliest upcoming one is set automatically.)");
+
+    var taskBody = bodyParts.join("\n");
+
+    // Create the event task
+    state.photoDate = null;
+    state.tasks = [{
+      id: "task-" + Date.now() + "-0",
+      title: "Register for " + eventName,
+      body: taskBody,
+      dueDateTime: dueDateTimeStr,
+      priority: false,
+      checked: true,
+      synced: false,
+      isEvent: true,
+      reminders: reminders
+    }];
+
+    showPhotoThumbnail();
+
+    // Always go to manual review for events (bypass lite mode)
+    updateStepper(3);
+    showSection("review");
+    renderPhotoDate();
+    renderTasks();
+    showToast("Event detected: \"" + eventName + "\". Review the task below.", "success");
     addTaskBtn.style.display = "";
     reviewActions.style.display = "flex";
   }
@@ -2079,7 +2242,7 @@
           '<button class="task-remove" data-idx="' + idx + '" title="Remove task" type="button"><i class="fas fa-trash-can"></i></button>' +
         '</div>' +
       '</div>' +
-      '<textarea class="task-body-input" data-idx="' + idx + '" data-field="body" placeholder="Notes (optional)" rows="1">' + escapeHtml(task.body) + '</textarea>' +
+      '<textarea class="task-body-input" data-idx="' + idx + '" data-field="body" placeholder="Notes (optional)" rows="' + (task.isEvent ? 4 : 1) + '">' + escapeHtml(task.body) + '</textarea>' +
       '<div class="task-meta">' +
         '<div class="task-due">' +
           '<i class="fas fa-calendar-day"></i>' +
@@ -2097,15 +2260,36 @@
       return;
     }
 
-    // Split into priority and other tasks (keeping original indices)
+    // Split into event, priority, and other tasks (keeping original indices)
     var priorityItems = [];
     var otherItems = [];
+    var eventItems = [];
     state.tasks.forEach(function(task, idx) {
-      if (task.priority) { priorityItems.push({ task: task, idx: idx }); }
+      if (task.isEvent) { eventItems.push({ task: task, idx: idx }); }
+      else if (task.priority) { priorityItems.push({ task: task, idx: idx }); }
       else { otherItems.push({ task: task, idx: idx }); }
     });
 
     var animIdx = 0;
+
+    // Event section
+    if (eventItems.length > 0) {
+      var eventLabel = document.createElement("div");
+      eventLabel.className = "task-section-label priority";
+      eventLabel.innerHTML = '<i class="fas fa-ticket"></i> Event Registration (' + eventItems.length + ')';
+      taskList.appendChild(eventLabel);
+
+      eventItems.forEach(function(item) {
+        taskList.appendChild(renderTaskCard(item.task, item.idx, animIdx++));
+      });
+    }
+
+    // Divider between event and other sections
+    if (eventItems.length > 0 && (priorityItems.length > 0 || otherItems.length > 0)) {
+      var divE = document.createElement("div");
+      divE.className = "task-section-divider";
+      taskList.appendChild(divE);
+    }
 
     // Priority section
     if (priorityItems.length > 0) {
@@ -2417,6 +2601,17 @@
           if (normalizedDT) {
             taskBody.dueDateTime = {
               dateTime: normalizedDT,
+              timeZone: tz
+            };
+          }
+        }
+        // Set reminder if task has reminders (e.g. event tasks)
+        if (task.reminders && task.reminders.length > 0) {
+          var bestReminder = pickBestReminder(task.reminders);
+          if (bestReminder) {
+            taskBody.isReminderOn = true;
+            taskBody.reminderDateTime = {
+              dateTime: bestReminder,
               timeZone: tz
             };
           }
