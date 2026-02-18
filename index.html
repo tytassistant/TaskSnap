@@ -895,9 +895,9 @@
     </div>
 
     <div class="card">
-      <div class="card-title">Upload your to-do list</div>
+      <div class="card-title">Upload Image</div>
       <div class="card-desc">
-        Take a photo or upload an image of a handwritten or printed to-do list. Our AI will extract the tasks for you.
+        Upload an image of a handwritten or printed to-do list.
       </div>
 
       <div class="upload-zone" id="uploadZone">
@@ -917,13 +917,12 @@
           <i class="fas fa-pen-fancy" style="margin-right:4px;"></i> Smart Input <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional)</span>
         </label>
         <div class="smart-input-box" id="smartInputBox">
-          <textarea id="smartTextInput" placeholder="Type a task or instruction… e.g. &#10;• remind me to pay tuition fee tonight&#10;• register for this event in two days&#10;&#10;You can also paste an image here (Ctrl+V)" rows="3"></textarea>
+          <textarea id="smartTextInput" placeholder="Type a task or instruction, and / or paste an image" rows="2"></textarea>
           <div id="smartPastePreview" style="display:none;">
             <img id="smartPasteImg" alt="Pasted image">
             <button type="button" id="smartPasteRemove" title="Remove pasted image"><i class="fas fa-xmark"></i></button>
           </div>
         </div>
-        <div class="hint" style="margin-top:4px;">Works alone or alongside a photo — text guides how the AI interprets the image.</div>
       </div>
 
       <div class="tz-row" style="margin-top:18px;">
@@ -1959,13 +1958,15 @@
       "- eventName: The name/title of the event (e.g. \"Math Olympiad 2026\", \"School Science Fair\")",
       "- registrationDeadline: The deadline/closing date for registration, in YYYY-MM-DD format. Look for phrases like \"register by\", \"deadline\", \"closing date\", \"報名截止\", \"截止日期\". null if not found.",
       "- registrationMethod: How to register — include any URL links, email addresses, QR code mentions, form names, or description of the registration process. Combine all relevant info into one string. Empty string if not found.",
+      "- taskDueDateTime: If the user instruction specifies WHEN the task should be due (e.g. 'in two days', 'tonight', 'by Friday'), compute it as YYYY-MM-DDTHH:mm:ss based on today's date. If the user does not specify a due date, set to null (the app will calculate a default).",
       "",
       "Return JSON:",
       '{',
       '  "type": "event",',
       '  "eventName": "string",',
       '  "registrationDeadline": "YYYY-MM-DD" or null,',
-      '  "registrationMethod": "string or empty string"',
+      '  "registrationMethod": "string or empty string",',
+      '  "taskDueDateTime": "YYYY-MM-DDTHH:mm:ss" or null',
       '}',
       "",
       "=== IMPORTANT ===",
@@ -2253,17 +2254,27 @@
     var regMethod = (parsed.registrationMethod || "").trim();
     var uploadDate = getTodayDate();
 
-    // Calculate due date: 9pm on the day BEFORE the deadline, or 9pm on upload date
-    var dueDate;
-    if (deadline && /^\d{4}-\d{2}-\d{2}$/.test(deadline)) {
-      dueDate = getPreviousDay(deadline);
+    // Due date priority:
+    // 1. If AI parsed a taskDueDateTime from user instruction → use it directly
+    // 2. Else if registration deadline found → 9pm on the day BEFORE the deadline
+    // 3. Else → 9pm on upload date
+    var dueDateTimeStr;
+    var userDue = parsed.taskDueDateTime || null;
+    if (userDue && /^\d{4}-\d{2}-\d{2}T/.test(userDue)) {
+      dueDateTimeStr = userDue;
     } else {
-      dueDate = uploadDate;
+      var dueDate;
+      if (deadline && /^\d{4}-\d{2}-\d{2}$/.test(deadline)) {
+        dueDate = getPreviousDay(deadline);
+      } else {
+        dueDate = uploadDate;
+      }
+      dueDateTimeStr = dueDate + "T21:00:00";
     }
-    var dueDateTimeStr = dueDate + "T21:00:00";
 
     // Reminder: 9pm of the task due date
-    var reminderDateTime = dueDate + "T21:00:00.0000000";
+    var dueDateOnly = dueDateTimeStr.substring(0, 10);
+    var reminderDateTime = dueDateOnly + "T21:00:00.0000000";
 
     // Build body/notes with registration info and user instruction
     var bodyParts = [];
