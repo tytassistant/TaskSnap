@@ -439,13 +439,69 @@
     display: flex; align-items: center; gap: 6px;
     font-size: 13px; color: var(--text-tertiary);
   }
-  .task-due input {
+  .task-due input[type="time"] {
     font-family: 'Bricolage Grotesque', sans-serif;
     font-size: 13px; color: var(--accent);
     background: var(--accent-light);
     border: none; border-radius: 6px;
     padding: 4px 8px; outline: none;
   }
+  .cal-trigger {
+    font-family: 'Bricolage Grotesque', sans-serif;
+    font-size: 13px; color: var(--accent);
+    background: var(--accent-light);
+    border: none; border-radius: 6px;
+    padding: 4px 10px; outline: none;
+    cursor: pointer; white-space: nowrap;
+    min-height: 28px; display: inline-flex;
+    align-items: center; gap: 4px;
+  }
+  .cal-trigger:hover { background: var(--accent-glow); }
+  .cal-trigger .placeholder { color: var(--text-tertiary); }
+  .cal-popup {
+    position: absolute; z-index: 100;
+    background: var(--bg-card); border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md); box-shadow: var(--shadow-lg);
+    padding: 12px; width: 280px;
+    display: none;
+  }
+  .cal-popup.open { display: block; }
+  .cal-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 8px;
+  }
+  .cal-header button {
+    background: none; border: none; cursor: pointer;
+    color: var(--text-secondary); font-size: 16px; padding: 4px 8px;
+    border-radius: 6px;
+  }
+  .cal-header button:hover { background: var(--bg-secondary); }
+  .cal-header .cal-month-year {
+    font-weight: 600; font-size: 14px; color: var(--text-primary);
+  }
+  .cal-grid {
+    display: grid; grid-template-columns: repeat(7, 1fr);
+    gap: 2px; text-align: center;
+  }
+  .cal-grid .cal-dow {
+    font-size: 11px; font-weight: 600; color: var(--text-tertiary);
+    padding: 4px 0; text-transform: uppercase;
+  }
+  .cal-grid .cal-day {
+    font-size: 13px; padding: 6px 0; border-radius: 6px;
+    cursor: pointer; color: var(--text-primary); border: none;
+    background: none;
+  }
+  .cal-grid .cal-day:hover { background: var(--accent-light); }
+  .cal-grid .cal-day.other-month { color: var(--text-tertiary); opacity: 0.5; }
+  .cal-grid .cal-day.today { font-weight: 700; box-shadow: inset 0 0 0 1.5px var(--accent); }
+  .cal-grid .cal-day.selected { background: var(--accent); color: #fff; font-weight: 600; }
+  .cal-clear-row { margin-top: 6px; text-align: right; }
+  .cal-clear-btn {
+    font-size: 12px; color: var(--danger); background: none;
+    border: none; cursor: pointer; padding: 2px 6px;
+  }
+  .cal-clear-btn:hover { text-decoration: underline; }
   .task-actions { display: flex; gap: 6px; }
   .task-remove {
     width: 28px; height: 28px; border-radius: 6px;
@@ -2185,7 +2241,9 @@
     card.className = cls;
     card.style.animationDelay = (animIdx * 0.06) + "s";
 
-    var dueDateVal = task.dueDateTime ? task.dueDateTime.substring(0, 16) : "";
+    var dueDateOnly = task.dueDateTime ? task.dueDateTime.substring(0, 10) : "";
+    var dueTimeOnly = task.dueDateTime ? task.dueDateTime.substring(11, 16) : "";
+    var dueDateDisplay = dueDateOnly ? formatDateDisplay(dueDateOnly) : "";
     var checkedAttr = task.checked ? " checked" : "";
 
     card.innerHTML =
@@ -2199,9 +2257,13 @@
       '</div>' +
       '<textarea class="task-body-input" data-idx="' + idx + '" data-field="body" placeholder="Notes (optional)" rows="' + (task.isEvent ? 2 : 1) + '">' + escapeHtml(task.body) + '</textarea>' +
       '<div class="task-meta">' +
-        '<div class="task-due">' +
+        '<div class="task-due" style="position:relative;">' +
           '<i class="fas fa-calendar-day"></i>' +
-          '<input type="datetime-local" data-idx="' + idx + '" data-field="dueDateTime" value="' + escapeAttr(dueDateVal) + '">' +
+          '<button type="button" class="cal-trigger" data-idx="' + idx + '">' +
+            (dueDateDisplay ? escapeHtml(dueDateDisplay) : '<span class="placeholder">Set date</span>') +
+          '</button>' +
+          '<input type="time" data-idx="' + idx + '" data-field="dueTime" value="' + escapeAttr(dueTimeOnly) + '" style="margin-left:4px;">' +
+          '<div class="cal-popup" data-cal-idx="' + idx + '"></div>' +
         '</div>' +
       '</div>';
 
@@ -2291,19 +2353,47 @@
       });
     });
 
-    // Bind text/date events
-    taskList.querySelectorAll(".task-title-input, .task-body-input, input[data-field='dueDateTime']").forEach(function(el) {
+    // Bind text events
+    taskList.querySelectorAll(".task-title-input, .task-body-input").forEach(function(el) {
       el.addEventListener("input", function() {
         var i = parseInt(this.getAttribute("data-idx"), 10);
         var field = this.getAttribute("data-field");
-        if (field === "dueDateTime") {
-          state.tasks[i].dueDateTime = this.value ? this.value + ":00" : null;
-        } else {
-          state.tasks[i][field] = this.value;
-          // Re-check priority if title or body changed
-          if (field === "title" || field === "body") {
-            state.tasks[i].priority = isPriorityTask(state.tasks[i].title, state.tasks[i].body);
-          }
+        state.tasks[i][field] = this.value;
+        if (field === "title" || field === "body") {
+          state.tasks[i].priority = isPriorityTask(state.tasks[i].title, state.tasks[i].body);
+        }
+      });
+    });
+
+    // Bind calendar trigger buttons
+    taskList.querySelectorAll(".cal-trigger").forEach(function(btn) {
+      btn.addEventListener("click", function(e) {
+        e.stopPropagation();
+        // Close other open popups
+        document.querySelectorAll(".cal-popup.open").forEach(function(p) { p.classList.remove("open"); });
+        var idx2 = parseInt(this.getAttribute("data-idx"), 10);
+        var popup = taskList.querySelector('.cal-popup[data-cal-idx="' + idx2 + '"]');
+        if (!popup) { return; }
+        // Determine which month to show
+        var task = state.tasks[idx2];
+        var showDate = task && task.dueDateTime ? task.dueDateTime.substring(0, 10) : getTodayDate();
+        var parts = showDate.split("-");
+        var yr = parseInt(parts[0], 10);
+        var mo = parseInt(parts[1], 10) - 1;
+        buildCalendarGrid(popup, idx2, yr, mo);
+        popup.classList.add("open");
+      });
+    });
+
+    // Bind time input changes
+    taskList.querySelectorAll("input[data-field='dueTime']").forEach(function(el) {
+      el.addEventListener("input", function() {
+        var i = parseInt(this.getAttribute("data-idx"), 10);
+        var task = state.tasks[i];
+        if (!task) { return; }
+        var dateStr = task.dueDateTime ? task.dueDateTime.substring(0, 10) : "";
+        if (dateStr && this.value) {
+          task.dueDateTime = dateStr + "T" + this.value + ":00";
         }
       });
     });
@@ -2352,6 +2442,143 @@
     d.textContent = s || "";
     return d.innerHTML;
   }
+
+  // ========== CALENDAR PICKER ==========
+  var MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+  var DOW_LABELS = ["Su","Mo","Tu","We","Th","Fr","Sa"];
+
+  function formatDateDisplay(dateStr) {
+    // dateStr: "YYYY-MM-DD" → "Mon DD, YYYY" e.g. "Feb 18, 2026"
+    if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) { return dateStr || ""; }
+    var parts = dateStr.split("-");
+    var m = parseInt(parts[1], 10) - 1;
+    var d = parseInt(parts[2], 10);
+    var y = parts[0];
+    return MONTH_NAMES[m].substring(0, 3) + " " + d + ", " + y;
+  }
+
+  function buildCalendarGrid(popup, taskIdx, year, month) {
+    var todayStr = getTodayDate();
+    var selectedStr = state.tasks[taskIdx] ? (state.tasks[taskIdx].dueDateTime || "").substring(0, 10) : "";
+
+    var html = '<div class="cal-header">' +
+      '<button type="button" class="cal-prev" data-idx="' + taskIdx + '">&lsaquo;</button>' +
+      '<span class="cal-month-year">' + MONTH_NAMES[month] + ' ' + year + '</span>' +
+      '<button type="button" class="cal-next" data-idx="' + taskIdx + '">&rsaquo;</button>' +
+    '</div>' +
+    '<div class="cal-grid">';
+
+    // Day-of-week headers (Sun first)
+    for (var d = 0; d < 7; d++) {
+      html += '<span class="cal-dow">' + DOW_LABELS[d] + '</span>';
+    }
+
+    // First day of month and total days
+    var firstDay = new Date(year, month, 1).getDay(); // 0=Sun
+    var daysInMonth = new Date(year, month + 1, 0).getDate();
+    var prevMonthDays = new Date(year, month, 0).getDate();
+
+    // Previous month trailing days
+    for (var p = firstDay - 1; p >= 0; p--) {
+      var prevDay = prevMonthDays - p;
+      var prevM = month === 0 ? 11 : month - 1;
+      var prevY = month === 0 ? year - 1 : year;
+      var prevStr = prevY + "-" + String(prevM + 1).padStart(2, "0") + "-" + String(prevDay).padStart(2, "0");
+      html += '<button type="button" class="cal-day other-month" data-date="' + prevStr + '" data-idx="' + taskIdx + '">' + prevDay + '</button>';
+    }
+
+    // Current month days
+    for (var i = 1; i <= daysInMonth; i++) {
+      var ds = year + "-" + String(month + 1).padStart(2, "0") + "-" + String(i).padStart(2, "0");
+      var cls = "cal-day";
+      if (ds === todayStr) { cls += " today"; }
+      if (ds === selectedStr) { cls += " selected"; }
+      html += '<button type="button" class="' + cls + '" data-date="' + ds + '" data-idx="' + taskIdx + '">' + i + '</button>';
+    }
+
+    // Next month leading days to fill last row
+    var totalCells = firstDay + daysInMonth;
+    var remaining = totalCells % 7 === 0 ? 0 : 7 - (totalCells % 7);
+    for (var n = 1; n <= remaining; n++) {
+      var nextM = month === 11 ? 0 : month + 1;
+      var nextY = month === 11 ? year + 1 : year;
+      var nextStr = nextY + "-" + String(nextM + 1).padStart(2, "0") + "-" + String(n).padStart(2, "0");
+      html += '<button type="button" class="cal-day other-month" data-date="' + nextStr + '" data-idx="' + taskIdx + '">' + n + '</button>';
+    }
+
+    html += '</div>';
+    html += '<div class="cal-clear-row"><button type="button" class="cal-clear-btn" data-idx="' + taskIdx + '">Clear date</button></div>';
+
+    popup.innerHTML = html;
+    popup.setAttribute("data-year", year);
+    popup.setAttribute("data-month", month);
+
+    // Bind nav buttons
+    popup.querySelector(".cal-prev").addEventListener("click", function(e) {
+      e.stopPropagation();
+      var nm = month - 1, ny = year;
+      if (nm < 0) { nm = 11; ny--; }
+      buildCalendarGrid(popup, taskIdx, ny, nm);
+    });
+    popup.querySelector(".cal-next").addEventListener("click", function(e) {
+      e.stopPropagation();
+      var nm = month + 1, ny = year;
+      if (nm > 11) { nm = 0; ny++; }
+      buildCalendarGrid(popup, taskIdx, ny, nm);
+    });
+
+    // Bind day clicks
+    popup.querySelectorAll(".cal-day").forEach(function(btn) {
+      btn.addEventListener("click", function(e) {
+        e.stopPropagation();
+        var dateVal = this.getAttribute("data-date");
+        var idx2 = parseInt(this.getAttribute("data-idx"), 10);
+        selectCalendarDate(idx2, dateVal);
+        popup.classList.remove("open");
+      });
+    });
+
+    // Bind clear
+    popup.querySelector(".cal-clear-btn").addEventListener("click", function(e) {
+      e.stopPropagation();
+      var idx2 = parseInt(this.getAttribute("data-idx"), 10);
+      selectCalendarDate(idx2, "");
+      popup.classList.remove("open");
+    });
+  }
+
+  function selectCalendarDate(taskIdx, dateStr) {
+    var task = state.tasks[taskIdx];
+    if (!task) { return; }
+    if (dateStr) {
+      // Preserve existing time, or default to 09:00
+      var existingTime = task.dueDateTime ? task.dueDateTime.substring(11, 16) : "";
+      if (!existingTime) { existingTime = "09:00"; }
+      task.dueDateTime = dateStr + "T" + existingTime + ":00";
+    } else {
+      task.dueDateTime = null;
+    }
+    // Update trigger button text
+    var trigger = taskList.querySelector('.cal-trigger[data-idx="' + taskIdx + '"]');
+    if (trigger) {
+      trigger.innerHTML = dateStr ? escapeHtml(formatDateDisplay(dateStr)) : '<span class="placeholder">Set date</span>';
+    }
+    // Update time input
+    var timeInput = taskList.querySelector('input[data-field="dueTime"][data-idx="' + taskIdx + '"]');
+    if (timeInput && dateStr) {
+      var t = task.dueDateTime ? task.dueDateTime.substring(11, 16) : "";
+      if (!timeInput.value && t) { timeInput.value = t; }
+    }
+  }
+
+  // Close all calendar popups when clicking outside
+  document.addEventListener("click", function(e) {
+    if (!e.target.closest(".cal-popup") && !e.target.closest(".cal-trigger")) {
+      document.querySelectorAll(".cal-popup.open").forEach(function(p) {
+        p.classList.remove("open");
+      });
+    }
+  });
 
   function escapeAttr(s) {
     return (s || "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -2569,8 +2796,6 @@
           };
         }
 
-        console.log("[TaskSnap] Creating task with body: " + JSON.stringify(taskBody));
-
         var taskToken = await getAccessToken();
         var tresp = await fetch("https://graph.microsoft.com/v1.0/me/todo/lists/" + listId + "/tasks", {
           method: "POST",
@@ -2590,47 +2815,6 @@
         }
 
         var createdTask = await tresp.json();
-        console.log("[TaskSnap] Created task response: " + JSON.stringify({
-          id: createdTask.id,
-          isReminderOn: createdTask.isReminderOn,
-          reminderDateTime: createdTask.reminderDateTime,
-          dueDateTime: createdTask.dueDateTime
-        }));
-
-        // If reminder was not set during creation, try PATCH as fallback
-        if (task.reminderDateTime && createdTask.id && !createdTask.isReminderOn) {
-          syncStatusText.textContent = "Setting reminder for task " + (i + 1) + " of " + total + "…";
-          console.log("[TaskSnap] Reminder not set during POST, trying PATCH...");
-          try {
-            var reminderToken = await getAccessToken();
-            var patchBody = {
-              isReminderOn: true,
-              reminderDateTime: {
-                dateTime: task.reminderDateTime,
-                timeZone: tz
-              }
-            };
-            var reminderResp = await fetch(
-              "https://graph.microsoft.com/v1.0/me/todo/lists/" + listId + "/tasks/" + createdTask.id,
-              {
-                method: "PATCH",
-                headers: {
-                  Authorization: "Bearer " + reminderToken,
-                  "Content-Type": "application/json",
-                  Prefer: "outlook.timezone=\"" + tz + "\""
-                },
-                body: JSON.stringify(patchBody)
-              }
-            );
-            var patchResult = await reminderResp.json();
-            console.log("[TaskSnap] PATCH reminder response (" + reminderResp.status + "): " + JSON.stringify({
-              isReminderOn: patchResult.isReminderOn,
-              reminderDateTime: patchResult.reminderDateTime
-            }));
-          } catch(reminderErr) {
-            console.log("[TaskSnap] Reminder PATCH error: " + reminderErr.message);
-          }
-        }
 
         // Attach photo to the created task
         if (photoBase64 && createdTask.id) {
