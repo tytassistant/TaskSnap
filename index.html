@@ -1870,45 +1870,6 @@
     return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
   }
 
-  // Helper: compute reminder DateTimes for an event task
-  // Returns array of { dateTime: "YYYY-MM-DDTHH:mm:ss.0000000", label: "description" }
-  function computeEventReminders(uploadDate, dueDate) {
-    var reminders = [];
-    // 9pm of upload date
-    reminders.push({ dateTime: uploadDate + "T21:00:00.0000000", label: "9:00 PM on upload day (" + uploadDate + ")" });
-    // 7:30am, 12:30pm, 6pm, 9pm of due date
-    reminders.push({ dateTime: dueDate + "T07:30:00.0000000", label: "7:30 AM on due date (" + dueDate + ")" });
-    reminders.push({ dateTime: dueDate + "T12:30:00.0000000", label: "12:30 PM on due date (" + dueDate + ")" });
-    reminders.push({ dateTime: dueDate + "T18:00:00.0000000", label: "6:00 PM on due date (" + dueDate + ")" });
-    reminders.push({ dateTime: dueDate + "T21:00:00.0000000", label: "9:00 PM on due date (" + dueDate + ")" });
-    // Deduplicate (upload 9pm might equal due 9pm if same day)
-    var seen = {};
-    var unique = [];
-    reminders.forEach(function(r) {
-      if (!seen[r.dateTime]) {
-        seen[r.dateTime] = true;
-        unique.push(r);
-      }
-    });
-    return unique;
-  }
-
-  // Helper: pick the best reminder to set via Graph API (earliest future one, or earliest overall)
-  function pickBestReminder(reminders) {
-    if (!reminders || reminders.length === 0) { return null; }
-    var now = new Date();
-    // Try to find the earliest future reminder
-    var future = reminders.filter(function(r) {
-      var dt = r.dateTime.replace(".0000000", "");
-      return new Date(dt) > now;
-    });
-    if (future.length > 0) {
-      return future[0].dateTime;
-    }
-    // All in the past — return the last one (most recent)
-    return reminders[reminders.length - 1].dateTime;
-  }
-
   function processExtractionResult(content) {
     extractionLoading.style.display = "none";
 
@@ -2067,10 +2028,10 @@
     }
     var dueDateTimeStr = dueDate + "T21:00:00";
 
-    // Compute reminders
-    var reminders = computeEventReminders(uploadDate, dueDate);
+    // Reminder: 9pm of the task due date
+    var reminderDateTime = dueDate + "T21:00:00.0000000";
 
-    // Build body/notes with registration info and reminder schedule
+    // Build body/notes with registration info only
     var bodyParts = [];
     if (regMethod) {
       bodyParts.push("Registration: " + regMethod);
@@ -2078,12 +2039,6 @@
     if (deadline) {
       bodyParts.push("Registration deadline: " + deadline);
     }
-    bodyParts.push("");
-    bodyParts.push("Reminder schedule:");
-    reminders.forEach(function(r) {
-      bodyParts.push("  \u2022 " + r.label);
-    });
-    bodyParts.push("(Note: Microsoft To Do supports 1 reminder — the earliest upcoming one is set automatically.)");
 
     var taskBody = bodyParts.join("\n");
 
@@ -2098,7 +2053,7 @@
       checked: true,
       synced: false,
       isEvent: true,
-      reminders: reminders
+      reminderDateTime: reminderDateTime
     }];
 
     showPhotoThumbnail();
@@ -2242,7 +2197,7 @@
           '<button class="task-remove" data-idx="' + idx + '" title="Remove task" type="button"><i class="fas fa-trash-can"></i></button>' +
         '</div>' +
       '</div>' +
-      '<textarea class="task-body-input" data-idx="' + idx + '" data-field="body" placeholder="Notes (optional)" rows="' + (task.isEvent ? 4 : 1) + '">' + escapeHtml(task.body) + '</textarea>' +
+      '<textarea class="task-body-input" data-idx="' + idx + '" data-field="body" placeholder="Notes (optional)" rows="' + (task.isEvent ? 2 : 1) + '">' + escapeHtml(task.body) + '</textarea>' +
       '<div class="task-meta">' +
         '<div class="task-due">' +
           '<i class="fas fa-calendar-day"></i>' +
@@ -2605,16 +2560,13 @@
             };
           }
         }
-        // Set reminder if task has reminders (e.g. event tasks)
-        if (task.reminders && task.reminders.length > 0) {
-          var bestReminder = pickBestReminder(task.reminders);
-          if (bestReminder) {
-            taskBody.isReminderOn = true;
-            taskBody.reminderDateTime = {
-              dateTime: bestReminder,
-              timeZone: tz
-            };
-          }
+        // Set reminder for event tasks (9pm on due date)
+        if (task.reminderDateTime) {
+          taskBody.isReminderOn = true;
+          taskBody.reminderDateTime = {
+            dateTime: task.reminderDateTime,
+            timeZone: tz
+          };
         }
 
         var taskToken = await getAccessToken();
