@@ -2560,15 +2560,6 @@
             };
           }
         }
-        // Set reminder for event tasks (9pm on due date)
-        if (task.reminderDateTime) {
-          taskBody.isReminderOn = true;
-          taskBody.reminderDateTime = {
-            dateTime: task.reminderDateTime,
-            timeZone: tz
-          };
-        }
-
         var taskToken = await getAccessToken();
         var tresp = await fetch("https://graph.microsoft.com/v1.0/me/todo/lists/" + listId + "/tasks", {
           method: "POST",
@@ -2587,6 +2578,36 @@
         }
 
         var createdTask = await tresp.json();
+
+        // Set reminder via PATCH after creation (event tasks)
+        if (task.reminderDateTime && createdTask.id) {
+          syncStatusText.textContent = "Setting reminder for task " + (i + 1) + " of " + total + "…";
+          try {
+            var reminderToken = await getAccessToken();
+            var reminderResp = await fetch(
+              "https://graph.microsoft.com/v1.0/me/todo/lists/" + listId + "/tasks/" + createdTask.id,
+              {
+                method: "PATCH",
+                headers: {
+                  Authorization: "Bearer " + reminderToken,
+                  "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                  isReminderOn: true,
+                  reminderDateTime: {
+                    dateTime: task.reminderDateTime,
+                    timeZone: tz
+                  }
+                })
+              }
+            );
+            if (!reminderResp.ok) {
+              console.log("Reminder set failed for task: " + JSON.stringify({ title: task.title, status: reminderResp.status }));
+            }
+          } catch(reminderErr) {
+            console.log("Reminder set error: " + reminderErr.message);
+          }
+        }
 
         // Attach photo to the created task
         if (photoBase64 && createdTask.id) {
