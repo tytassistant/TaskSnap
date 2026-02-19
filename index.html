@@ -628,6 +628,34 @@
   }
   .tz-row .field { flex: 1; margin-bottom: 0; }
 
+  /* PIN / toggle button */
+  .pin-field-wrap { position: relative; }
+  .pin-toggle-btn {
+    position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+    background: none; border: none; color: var(--text-tertiary);
+    cursor: pointer; font-size: 15px; padding: 4px; z-index: 2;
+  }
+  .pin-toggle-btn:hover { color: var(--accent); }
+  .pin-field-wrap input { padding-right: 44px; }
+  .pin-links { font-size: 12px; margin-top: 6px; display: flex; gap: 14px; }
+  .pin-links a {
+    color: var(--accent); cursor: pointer; text-decoration: none;
+  }
+  .pin-links a:hover { text-decoration: underline; }
+  .pin-error { color: var(--danger); font-size: 12px; margin-top: 4px; display: none; }
+
+  /* Confirm dialog overlay */
+  .confirm-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+    display: flex; align-items: center; justify-content: center; z-index: 200;
+  }
+  .confirm-box {
+    background: var(--bg-card); border-radius: var(--radius-md); padding: 24px;
+    max-width: 340px; width: 90%; box-shadow: var(--shadow-lg);
+  }
+  .confirm-box p { color: var(--text-primary); font-size: 14px; line-height: 1.5; margin-bottom: 16px; }
+  .confirm-box .confirm-actions { display: flex; justify-content: flex-end; gap: 10px; }
+
   /* Action bar */
   .action-bar {
     display: flex; gap: 10px; margin-top: 20px;
@@ -869,16 +897,58 @@
       </div>
     </div>
 
-    <div class="card">
+    <div class="card" id="poeKeyCard">
       <div class="card-title" style="font-size:16px;"><i class="fas fa-robot" style="margin-right:6px;"></i> Poe API Key</div>
-      <div class="card-desc">
-        Used for AI-powered task extraction from your photos. Get your key from <a href="https://poe.com/api_key" target="_blank" rel="noopener"><strong>poe.com/api_key</strong></a>.
+
+      <!-- STATE A: Full API key + PIN setup (first time or change key) -->
+      <div id="pinStateA">
+        <div class="card-desc" id="pinStateADesc">
+          Used for AI-powered task extraction. Get your key from <a href="https://poe.com/api_key" target="_blank" rel="noopener"><strong>poe.com/api_key</strong></a>.
+        </div>
+        <div class="field">
+          <div class="pin-field-wrap">
+            <input type="password" id="poeApiKeyInput" name="poe_api_token" placeholder="Enter your Poe API key" autocomplete="one-time-code" data-form-type="other" data-lpignore="true" style="font-size:16px;">
+            <button type="button" class="pin-toggle-btn" data-target="poeApiKeyInput" title="Show/hide key"><i class="fas fa-eye"></i></button>
+          </div>
+        </div>
+        <div style="margin-top:4px; margin-bottom:8px;">
+          <div style="font-size:13px; font-weight:600; color:var(--text-secondary); margin-bottom:6px;"><i class="fas fa-lock" style="margin-right:4px;"></i> Set a PIN to save this key</div>
+          <div class="field" style="margin-bottom:8px;">
+            <div class="pin-field-wrap">
+              <input type="password" id="pinSetInput" placeholder="Enter 6-character PIN" maxlength="6" autocomplete="off" style="font-size:16px;">
+              <button type="button" class="pin-toggle-btn" data-target="pinSetInput" title="Show/hide PIN"><i class="fas fa-eye"></i></button>
+            </div>
+          </div>
+          <div class="field" style="margin-bottom:4px;">
+            <div class="pin-field-wrap">
+              <input type="password" id="pinConfirmInput" placeholder="Confirm PIN" maxlength="6" autocomplete="off" style="font-size:16px;">
+              <button type="button" class="pin-toggle-btn" data-target="pinConfirmInput" title="Show/hide PIN"><i class="fas fa-eye"></i></button>
+            </div>
+          </div>
+          <div class="hint">Alphanumeric, exactly 6 characters. Your key is encrypted locally — PIN is never stored.</div>
+          <div class="pin-error" id="pinSetError"></div>
+        </div>
+        <div id="pinStateACancel" style="display:none; margin-bottom:8px;">
+          <div class="pin-links"><a id="pinCancelChangeBtn">Cancel</a></div>
+        </div>
       </div>
-      <div class="field" style="position:relative;">
-        <input type="password" id="poeApiKeyInput" name="poe_api_token" placeholder="Enter your Poe API key" autocomplete="current-password" style="font-size:16px; padding-right:44px;">
-        <button type="button" id="togglePoeKeyBtn" style="position:absolute; right:10px; top:28px; background:none; border:none; color:var(--text-tertiary); cursor:pointer; font-size:15px; padding:4px;" title="Show/hide key"><i class="fas fa-eye"></i></button>
-        <div class="hint">Not saved — you&rsquo;ll re-enter it each session. Uses your Poe subscription points.</div>
+
+      <!-- STATE B: PIN unlock (return visit with saved key) -->
+      <div id="pinStateB" style="display:none;">
+        <div class="card-desc">Your key is saved. Enter your PIN to unlock.</div>
+        <div class="field" style="margin-bottom:4px;">
+          <div class="pin-field-wrap">
+            <input type="password" id="pinUnlockInput" placeholder="Enter 6-character PIN" maxlength="6" autocomplete="off" style="font-size:16px;">
+            <button type="button" class="pin-toggle-btn" data-target="pinUnlockInput" title="Show/hide PIN"><i class="fas fa-eye"></i></button>
+          </div>
+          <div class="pin-error" id="pinUnlockError"></div>
+        </div>
+        <div class="pin-links">
+          <a id="forgotPinBtn">Forgot PIN?</a>
+          <a id="changeApiKeyBtn">Change API key</a>
+        </div>
       </div>
+
       <button class="btn btn-block" id="continueToUploadBtn" type="button" style="display:none; margin-top:12px; background:var(--accent); color:#fff;">
         <i class="fas fa-arrow-right" style="margin-right:6px;"></i> Continue to input
       </button>
@@ -1285,13 +1355,6 @@
     instrBody.classList.toggle("show");
   });
 
-  // ========== POE KEY VISIBILITY TOGGLE ==========
-  $id("togglePoeKeyBtn").addEventListener("click", function() {
-    var isPassword = poeApiKeyInput.type === "password";
-    poeApiKeyInput.type = isPassword ? "text" : "password";
-    this.querySelector("i").className = isPassword ? "fas fa-eye-slash" : "fas fa-eye";
-  });
-
   // ========== GRAPH API ERROR PARSER ==========
   async function parseGraphError(resp) {
     var status = resp.status;
@@ -1446,8 +1509,359 @@
     } catch(ignored) { /* storage might not be available */ }
   }
 
+  // Decrypted Poe API key held in memory (never stored in plain text)
+  var decryptedPoeKey = "";
+
   function getPoeApiKey() {
-    return poeApiKeyInput.value.trim();
+    // Return decrypted key if available, otherwise fall back to input field
+    return decryptedPoeKey || poeApiKeyInput.value.trim();
+  }
+
+  // ========== PIN ENCRYPTION (Web Crypto API — all local, no network) ==========
+  var STORAGE_KEY_ENCRYPTED = "tasksnap_enckey";
+
+  function hasSavedEncryptedKey() {
+    try {
+      return appStorage && !!appStorage.getItem(STORAGE_KEY_ENCRYPTED);
+    } catch(e) { return false; }
+  }
+
+  function clearSavedEncryptedKey() {
+    try {
+      if (appStorage) { appStorage.removeItem(STORAGE_KEY_ENCRYPTED); }
+    } catch(e) { /* ignore */ }
+  }
+
+  async function deriveKey(pin, salt) {
+    var enc = new TextEncoder();
+    var keyMaterial = await crypto.subtle.importKey(
+      "raw", enc.encode(pin), "PBKDF2", false, ["deriveKey"]
+    );
+    return crypto.subtle.deriveKey(
+      { name: "PBKDF2", salt: salt, iterations: 100000, hash: "SHA-256" },
+      keyMaterial,
+      { name: "AES-GCM", length: 256 },
+      false,
+      ["encrypt", "decrypt"]
+    );
+  }
+
+  async function encryptAndStore(apiKey, pin) {
+    var enc = new TextEncoder();
+    var salt = crypto.getRandomValues(new Uint8Array(16));
+    var iv = crypto.getRandomValues(new Uint8Array(12));
+    var key = await deriveKey(pin, salt);
+    var ciphertext = await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv: iv }, key, enc.encode(apiKey)
+    );
+    var data = {
+      s: btoa(String.fromCharCode.apply(null, salt)),
+      i: btoa(String.fromCharCode.apply(null, iv)),
+      c: btoa(String.fromCharCode.apply(null, new Uint8Array(ciphertext)))
+    };
+    appStorage.setItem(STORAGE_KEY_ENCRYPTED, JSON.stringify(data));
+  }
+
+  function b64ToUint8(b64) {
+    var bin = atob(b64);
+    var arr = new Uint8Array(bin.length);
+    for (var j = 0; j < bin.length; j++) { arr[j] = bin.charCodeAt(j); }
+    return arr;
+  }
+
+  async function decryptWithPin(pin) {
+    var raw = appStorage.getItem(STORAGE_KEY_ENCRYPTED);
+    if (!raw) { throw new Error("No saved key"); }
+    var data = JSON.parse(raw);
+    var salt = b64ToUint8(data.s);
+    var iv = b64ToUint8(data.i);
+    var ciphertext = b64ToUint8(data.c);
+    var key = await deriveKey(pin, salt);
+    var decrypted = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: iv }, key, ciphertext
+    );
+    return new TextDecoder().decode(decrypted);
+  }
+
+  // ========== PIN UI STATE MANAGEMENT ==========
+  var pinStateA = $id("pinStateA");
+  var pinStateB = $id("pinStateB");
+  var pinStateADesc = $id("pinStateADesc");
+  var pinSetInput = $id("pinSetInput");
+  var pinConfirmInput = $id("pinConfirmInput");
+  var pinSetError = $id("pinSetError");
+  var pinUnlockInput = $id("pinUnlockInput");
+  var pinUnlockError = $id("pinUnlockError");
+  var forgotPinBtn = $id("forgotPinBtn");
+  var changeApiKeyBtn = $id("changeApiKeyBtn");
+  var pinStateACancel = $id("pinStateACancel");
+  var pinCancelChangeBtn = $id("pinCancelChangeBtn");
+
+  function showPinError(el, msg) {
+    el.textContent = msg;
+    el.style.display = msg ? "" : "none";
+  }
+
+  function switchToPinStateA(isChange) {
+    pinStateA.style.display = "";
+    pinStateB.style.display = "none";
+    poeApiKeyInput.value = "";
+    pinSetInput.value = "";
+    pinConfirmInput.value = "";
+    showPinError(pinSetError, "");
+    if (isChange) {
+      pinStateADesc.innerHTML = "Enter a new API key and set a new PIN.";
+      pinStateACancel.style.display = "";
+    } else {
+      pinStateADesc.innerHTML = 'Used for AI-powered task extraction. Get your key from <a href="https://poe.com/api_key" target="_blank" rel="noopener"><strong>poe.com/api_key</strong></a>.';
+      pinStateACancel.style.display = "none";
+    }
+  }
+
+  function switchToPinStateB() {
+    pinStateA.style.display = "none";
+    pinStateB.style.display = "";
+    pinUnlockInput.value = "";
+    showPinError(pinUnlockError, "");
+  }
+
+  // Validate PIN: exactly 6 alphanumeric characters
+  function isValidPin(pin) {
+    return /^[a-zA-Z0-9]{6}$/.test(pin);
+  }
+
+  // ========== AUTO-MASK INPUT BEHAVIOUR ==========
+  // Each character visible for 500ms then masked with ●
+  // Show/hide toggle overrides: shows full text or re-enables masking
+  var autoMaskTimers = {};
+
+  function setupAutoMaskInput(input) {
+    var realValue = "";
+    var showFull = false;
+    var timerId = null;
+
+    function renderMasked() {
+      if (showFull) {
+        input.value = realValue;
+      } else if (realValue.length === 0) {
+        input.value = "";
+      } else {
+        // All masked
+        input.value = "●".repeat(realValue.length);
+      }
+    }
+
+    function renderLastVisible() {
+      if (realValue.length <= 1) {
+        input.value = realValue;
+      } else {
+        input.value = "●".repeat(realValue.length - 1) + realValue.charAt(realValue.length - 1);
+      }
+    }
+
+    input.addEventListener("input", function(e) {
+      if (showFull) {
+        // In show mode, input value IS the real value
+        realValue = input.value;
+        return;
+      }
+
+      // Calculate what changed
+      var cursorPos = input.selectionStart || 0;
+      var rawVal = input.value;
+      var oldLen = realValue.length;
+      var newLen = rawVal.length;
+
+      if (newLen > oldLen) {
+        // Characters added — extract new chars from raw input
+        var addedCount = newLen - oldLen;
+        var insertPos = cursorPos - addedCount;
+        if (insertPos < 0) { insertPos = 0; }
+        var added = "";
+        for (var k = insertPos; k < insertPos + addedCount; k++) {
+          var ch = rawVal.charAt(k);
+          if (ch !== "●") { added += ch; }
+          else { added += realValue.charAt(k) || ""; }
+        }
+        realValue = realValue.substring(0, insertPos) + added + realValue.substring(insertPos);
+      } else if (newLen < oldLen) {
+        // Characters deleted
+        var deletedCount = oldLen - newLen;
+        var delPos = cursorPos;
+        realValue = realValue.substring(0, delPos) + realValue.substring(delPos + deletedCount);
+      }
+
+      // Show last char briefly
+      if (timerId) { clearTimeout(timerId); }
+      renderLastVisible();
+      var savedPos = cursorPos;
+      timerId = setTimeout(function() {
+        renderMasked();
+        // Try to restore cursor
+        try { input.setSelectionRange(savedPos, savedPos); } catch(ignored) {}
+        timerId = null;
+      }, 500);
+    });
+
+    // Expose controls for the toggle button
+    input._autoMask = {
+      getRealValue: function() { return realValue; },
+      setRealValue: function(v) { realValue = v; renderMasked(); },
+      toggleShow: function(show) {
+        showFull = show;
+        if (timerId) { clearTimeout(timerId); timerId = null; }
+        if (show) {
+          input.value = realValue;
+        } else {
+          renderMasked();
+        }
+      },
+      isShowFull: function() { return showFull; },
+      clear: function() {
+        realValue = "";
+        showFull = false;
+        if (timerId) { clearTimeout(timerId); timerId = null; }
+        input.value = "";
+      }
+    };
+  }
+
+  // Setup auto-mask on all PIN inputs
+  setupAutoMaskInput(pinSetInput);
+  setupAutoMaskInput(pinConfirmInput);
+  setupAutoMaskInput(pinUnlockInput);
+
+  // ========== TOGGLE BUTTONS (show/hide for all pin-toggle-btn) ==========
+  document.querySelectorAll(".pin-toggle-btn").forEach(function(btn) {
+    btn.addEventListener("click", function() {
+      var targetId = btn.getAttribute("data-target");
+      var targetInput = $id(targetId);
+      if (!targetInput) { return; }
+      var icon = btn.querySelector("i");
+
+      if (targetInput._autoMask) {
+        // Auto-mask input
+        var newShow = !targetInput._autoMask.isShowFull();
+        targetInput._autoMask.toggleShow(newShow);
+        icon.className = newShow ? "fas fa-eye-slash" : "fas fa-eye";
+      } else {
+        // Regular password input (API key field)
+        var isPwd = targetInput.type === "password";
+        targetInput.type = isPwd ? "text" : "password";
+        icon.className = isPwd ? "fas fa-eye-slash" : "fas fa-eye";
+      }
+    });
+  });
+
+  // ========== FORGOT PIN / CHANGE API KEY ==========
+  function showConfirmDialog(message, onConfirm) {
+    var overlay = document.createElement("div");
+    overlay.className = "confirm-overlay";
+    overlay.innerHTML =
+      '<div class="confirm-box">' +
+      '<p>' + message + '</p>' +
+      '<div class="confirm-actions">' +
+      '<button class="btn btn-outline btn-sm" data-action="cancel">Cancel</button>' +
+      '<button class="btn btn-primary btn-sm" data-action="confirm">Confirm</button>' +
+      '</div></div>';
+    document.body.appendChild(overlay);
+    overlay.querySelector('[data-action="cancel"]').addEventListener("click", function() {
+      overlay.remove();
+    });
+    overlay.querySelector('[data-action="confirm"]').addEventListener("click", function() {
+      overlay.remove();
+      onConfirm();
+    });
+    overlay.addEventListener("click", function(e) {
+      if (e.target === overlay) { overlay.remove(); }
+    });
+  }
+
+  forgotPinBtn.addEventListener("click", function() {
+    showConfirmDialog(
+      "This will clear your saved key. You&rsquo;ll need to enter the full API key again and set a new PIN.",
+      function() {
+        clearSavedEncryptedKey();
+        decryptedPoeKey = "";
+        switchToPinStateA(false);
+        showToast("Saved key cleared. Enter your API key and set a new PIN.", "info");
+      }
+    );
+  });
+
+  changeApiKeyBtn.addEventListener("click", function() {
+    switchToPinStateA(true);
+  });
+
+  pinCancelChangeBtn.addEventListener("click", function() {
+    switchToPinStateB();
+  });
+
+  // ========== PIN VALIDATION HELPERS ==========
+  // Validate State A (API key + PIN setup) and encrypt
+  async function validateAndEncryptStateA() {
+    var apiKey = poeApiKeyInput.value.trim();
+    if (!apiKey) {
+      showToast("Please enter your Poe API key", "error");
+      return false;
+    }
+    var pin = pinSetInput._autoMask.getRealValue();
+    var confirmPin = pinConfirmInput._autoMask.getRealValue();
+
+    if (!pin || !confirmPin) {
+      showPinError(pinSetError, "Please enter and confirm your PIN.");
+      return false;
+    }
+    if (!isValidPin(pin)) {
+      showPinError(pinSetError, "PIN must be exactly 6 alphanumeric characters.");
+      return false;
+    }
+    if (pin !== confirmPin) {
+      showPinError(pinSetError, "PINs do not match.");
+      return false;
+    }
+    showPinError(pinSetError, "");
+
+    try {
+      await encryptAndStore(apiKey, pin);
+      decryptedPoeKey = apiKey;
+      return true;
+    } catch(err) {
+      showPinError(pinSetError, "Encryption failed: " + err.message);
+      return false;
+    }
+  }
+
+  // Validate State B (PIN unlock) and decrypt
+  async function validateAndDecryptStateB() {
+    var pin = pinUnlockInput._autoMask.getRealValue();
+    if (!pin) {
+      showPinError(pinUnlockError, "Please enter your PIN.");
+      return false;
+    }
+    if (!isValidPin(pin)) {
+      showPinError(pinUnlockError, "PIN must be exactly 6 alphanumeric characters.");
+      return false;
+    }
+    showPinError(pinUnlockError, "");
+
+    try {
+      var key = await decryptWithPin(pin);
+      decryptedPoeKey = key;
+      return true;
+    } catch(err) {
+      showPinError(pinUnlockError, "Wrong PIN. Please try again.");
+      return false;
+    }
+  }
+
+  // Determine initial PIN state
+  function initPinState() {
+    if (hasSavedEncryptedKey()) {
+      switchToPinStateB();
+    } else {
+      switchToPinStateA(false);
+    }
   }
 
   // ========== MSAL LOGIN HANDLER ==========
@@ -1468,10 +1882,16 @@
       showToast("Please enter your Application (Client) ID", "error");
       return;
     }
-    var poeKey = getPoeApiKey();
-    if (!poeKey) {
-      showToast("Please enter your Poe API key", "error");
-      return;
+
+    // Handle PIN state: State A (setup) or State B (unlock)
+    if (pinStateB.style.display !== "none") {
+      // State B: PIN unlock
+      var unlockOk = await validateAndDecryptStateB();
+      if (!unlockOk) { return; }
+    } else {
+      // State A: Full key + PIN setup
+      var setupOk = await validateAndEncryptStateA();
+      if (!setupOk) { return; }
     }
 
     // Save settings
@@ -1518,11 +1938,14 @@
   });
 
   // ========== CONTINUE BUTTON (after session restored) ==========
-  continueToUploadBtn.addEventListener("click", function() {
-    var poeKey = getPoeApiKey();
-    if (!poeKey) {
-      showToast("Please enter your Poe API key", "error");
-      return;
+  continueToUploadBtn.addEventListener("click", async function() {
+    // Handle PIN state: State A (setup) or State B (unlock)
+    if (pinStateB.style.display !== "none") {
+      var unlockOk = await validateAndDecryptStateB();
+      if (!unlockOk) { return; }
+    } else {
+      var setupOk = await validateAndEncryptStateA();
+      if (!setupOk) { return; }
     }
     updateStepper(2);
     showSection("upload");
@@ -1531,6 +1954,7 @@
   // ========== AUTO-LOGIN ON PAGE LOAD ==========
   async function tryAutoLogin() {
     loadSavedSettings();
+    initPinState(); // Show State A or B based on whether encrypted key exists
     var clientId = clientIdInput.value.trim();
     if (!clientId) { return; }
 
@@ -1562,20 +1986,17 @@
 
       var displayName = state.userInfo ? (state.userInfo.displayName || state.userInfo.mail || "User") : "User";
 
-      // Check if Poe API key is already filled (e.g. from password manager autofill)
-      var poeKey = getPoeApiKey();
-      if (poeKey) {
-        // Both Microsoft session and Poe key are ready — go straight to upload
-        updateStepper(2);
-        showSection("upload");
-        showToast("Welcome back, " + displayName, "success");
+      // Microsoft session restored — stay on auth page for PIN/key entry
+      // Hide the Microsoft card, show session restored banner, show continue button
+      msalCard.style.display = "none";
+      sessionRestoredBanner.style.display = "";
+      continueToUploadBtn.style.display = "";
+
+      if (hasSavedEncryptedKey()) {
+        sessionRestoredUser.textContent = "Signed in as " + displayName + " — enter your PIN to continue.";
+        showToast("Welcome back, " + displayName + ". Enter your PIN to unlock.", "success");
       } else {
-        // Microsoft session restored but no Poe API key — stay on auth page
-        // Hide the Microsoft card, show session restored banner, show continue button
-        msalCard.style.display = "none";
-        sessionRestoredBanner.style.display = "";
         sessionRestoredUser.textContent = "Signed in as " + displayName + " — enter your Poe API key below to continue.";
-        continueToUploadBtn.style.display = "";
         showToast("Welcome back, " + displayName + ". Please enter your Poe API key.", "success");
       }
     } catch(err) {
@@ -1623,11 +2044,13 @@
     state.tasks = [];
     state.uploadedFile = null;
     state.msalInstance = null;
+    decryptedPoeKey = "";
     stopTokenExpiryTracker();
     // Restore auth section to default state
     msalCard.style.display = "";
     sessionRestoredBanner.style.display = "none";
     continueToUploadBtn.style.display = "none";
+    initPinState();
     updateStepper(1);
     showSection("auth");
     showToast("Signed out", "info");
