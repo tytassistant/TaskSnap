@@ -937,7 +937,7 @@
 
       <label id="liteModeLabel" style="display:flex; align-items:center; gap:10px; margin-top:14px; cursor:pointer; padding:10px 12px; background:var(--accent-light); border-radius:var(--radius-sm); font-size:14px; font-weight:600; color:var(--accent);">
         <input type="checkbox" id="liteModeCheck" checked style="width:18px; height:18px; accent-color:var(--accent); cursor:pointer;">
-        <span><i class="fas fa-bolt" style="margin-right:4px;"></i> Lite mode — sync quiz and dictation tasks only, skip review</span>
+        <span><i class="fas fa-bolt" style="margin-right:4px;"></i> Lite mode — bypass review</span>
       </label>
     </div>
   </div>
@@ -1013,7 +1013,7 @@
           <i class="fas fa-arrow-rotate-left"></i> Retry failed tasks
         </button>
         <button class="btn btn-accent" id="newScanBtn" type="button">
-          <i class="fas fa-camera-retro"></i> Scan another list
+          <i class="fas fa-camera-retro"></i> Input more tasks
         </button>
       </div>
     </div>
@@ -1911,18 +1911,20 @@
     // Build the prompt based on what inputs are provided
     var todayDate = getTodayDate();
 
-    // Base vision prompt for images (todo list + event detection)
+    // Base vision prompt for images (todo list + event detection + mixed)
     var imagePromptLines = [
-      "Analyze this image carefully.",
+      "Analyze this image carefully. Today's date is: " + todayDate,
       "",
       "=== STEP 1: CLASSIFY THE IMAGE ===",
       "Determine if this image is:",
       '- "todo_list": a handwritten or printed list of homework tasks, assignments, or things to do',
       '- "event": an event flier, event poster, event summary email/webpage, registration notice, competition announcement, workshop notice, or similar event information',
       "",
+      "IMPORTANT: If the user instruction mentions ADDITIONAL tasks beyond what the image shows (e.g. the image is an event flier but the user also mentions homework or exams), you MUST return ALL items — both from the image AND from the user instruction — using the mixed format described below.",
+      "",
       "=== STEP 2: EXTRACT BASED ON TYPE ===",
       "",
-      '--- If type is "todo_list" ---',
+      '--- If type is "todo_list" (and no events) ---',
       "",
       "1. PHOTO DATE: Look at the top-left area of the image for a date (the photo date / header date). Extract it as photoDate in YYYY-MM-DD format. If no date is found, set photoDate to null.",
       "",
@@ -1955,7 +1957,7 @@
       '}',
       "If a task is already marked as done/completed in the image, still include it but prepend [DONE] to the title.",
       "",
-      '--- If type is "event" ---',
+      '--- If type is "event" (and no additional tasks from user instruction) ---',
       "",
       "Extract the following from the event flier/email/webpage:",
       "- eventName: The name/title of the event (e.g. \"Math Olympiad 2026\", \"School Science Fair\")",
@@ -1972,32 +1974,14 @@
       '  "taskDueDateTime": "YYYY-MM-DDTHH:mm:ss" or null',
       '}',
       "",
-      "=== IMPORTANT ===",
-      "Return ONLY a valid JSON object (no other text, no markdown code blocks).",
-      "Today's date is: " + todayDate
-    ];
-
-    // Text-only prompt (no image)
-    var textOnlyPromptLines = [
-      "The user wants to create tasks based on the following natural language input. Today's date is " + todayDate + ".",
+      '--- If MIXED (image has an event AND user instruction mentions additional tasks, or vice versa) ---',
       "",
-      "=== STEP 1: CLASSIFY THE INPUT ===",
-      "Determine if this input is:",
-      "- \"text_task\": a regular task, homework, assignment, reminder, or thing to do",
-      "- \"event\": a request to register for an event, competition, workshop, activity, or similar event (look for keywords like 'register', 'sign up', 'enrol', 'enroll', '報名')",
-      "",
-      "=== STEP 2: EXTRACT BASED ON TYPE ===",
-      "",
-      '--- If type is "text_task" ---',
-      "Parse the user's text and extract:",
-      "- A clear task title",
-      "- A due date/time if mentioned (interpret relative dates like 'tonight' = today 21:00, 'tomorrow' = next day 09:00, 'in two days' = 2 days from today 09:00, 'next Friday' = the coming Friday 09:00, etc.)",
-      "- Any additional notes/details",
-      "- PRIORITY DETECTION: A task is priority if its title or content relates to any of these keywords (case-insensitive): quiz, exam, test, assessment, 測, 小測, 測驗, 考, 考試, 口試, dict, dictation, 默, 默書. Set \"priority\" to true for these tasks, false otherwise.",
+      "When the input contains BOTH event registration items AND regular tasks (e.g. user says 'register for this event, also english exam next Monday and maths homework by 25 Mar'), you MUST return ALL items using this mixed format:",
       "",
       "Return JSON:",
       '{',
-      '  "type": "text_task",',
+      '  "type": "mixed",',
+      '  "photoDate": "YYYY-MM-DD" or null,',
       '  "tasks": [',
       '    {',
       '      "title": "string",',
@@ -2005,24 +1989,74 @@
       '      "dueDateTime": "YYYY-MM-DDTHH:mm:ss" or null,',
       '      "priority": true or false',
       '    }',
+      '  ],',
+      '  "events": [',
+      '    {',
+      '      "eventName": "string",',
+      '      "registrationDeadline": "YYYY-MM-DD" or null,',
+      '      "registrationMethod": "string or empty string",',
+      '      "taskDueDateTime": "YYYY-MM-DDTHH:mm:ss" or null',
+      '    }',
       '  ]',
       '}',
-      "The user may describe one or multiple tasks. Extract all of them.",
+      "Apply the same PRIORITY DETECTION and DATE PARSING rules to the tasks array.",
       "",
-      '--- If type is "event" ---',
-      "Extract the following:",
+      "=== IMPORTANT ===",
+      "Return ONLY a valid JSON object (no other text, no markdown code blocks)."
+    ];
+
+    // Text-only prompt (no image)
+    var textOnlyPromptLines = [
+      "The user wants to create tasks based on the following natural language input. Today's date is " + todayDate + ".",
+      "",
+      "The user may describe MULTIPLE items in a single input. Each item can be either a regular task or an event registration. You MUST extract ALL of them.",
+      "",
+      "For EACH item, classify it as:",
+      "- regular task: homework, assignment, reminder, or thing to do",
+      "- event: a request to register for an event, competition, workshop, activity, dinner, etc. (look for keywords like 'register', 'sign up', 'enrol', 'enroll', '報名')",
+      "",
+      "=== EXTRACTION RULES ===",
+      "",
+      "For regular tasks:",
+      "- Extract a clear task title",
+      "- Parse due date/time if mentioned (interpret relative dates like 'tonight' = today 21:00, 'tomorrow' = next day 09:00, 'in two days' = 2 days from today 09:00, 'next Friday' = the coming Friday 09:00, etc.)",
+      "- Extract any additional notes/details",
+      "- PRIORITY DETECTION: A task is priority if its title or content relates to any of these keywords (case-insensitive): quiz, exam, test, assessment, 測, 小測, 測驗, 考, 考試, 口試, dict, dictation, 默, 默書. Set \"priority\" to true for these tasks, false otherwise.",
+      "",
+      "For events:",
       "- eventName: The name/title of the event",
-      "- registrationDeadline: The deadline/closing date for registration in YYYY-MM-DD format. null if not mentioned.",
-      "- registrationMethod: How to register — include any URL, email, or description. Empty string if not mentioned.",
-      "- taskDueDateTime: If the user specifies WHEN the task should be due (e.g. 'in two days', 'tonight', 'by Friday'), compute it as YYYY-MM-DDTHH:mm:ss based on today's date. If not specified, set to null.",
+      "- registrationDeadline: deadline date in YYYY-MM-DD format, null if not mentioned",
+      "- registrationMethod: how to register (URL, email, etc.), empty string if not mentioned",
+      "- taskDueDateTime: parse from user input as YYYY-MM-DDTHH:mm:ss, null if not specified",
       "",
-      "Return JSON:",
+      "=== RESPONSE FORMAT ===",
+      "",
+      "If the input contains ONLY regular tasks (no events):",
+      '{',
+      '  "type": "text_task",',
+      '  "tasks": [',
+      '    { "title": "string", "body": "string", "dueDateTime": "YYYY-MM-DDTHH:mm:ss" or null, "priority": true or false }',
+      '  ]',
+      '}',
+      "",
+      "If the input contains ONLY event(s) (no regular tasks):",
       '{',
       '  "type": "event",',
       '  "eventName": "string",',
       '  "registrationDeadline": "YYYY-MM-DD" or null,',
       '  "registrationMethod": "string or empty string",',
       '  "taskDueDateTime": "YYYY-MM-DDTHH:mm:ss" or null',
+      '}',
+      "",
+      "If the input contains BOTH events AND regular tasks:",
+      '{',
+      '  "type": "mixed",',
+      '  "tasks": [',
+      '    { "title": "string", "body": "string", "dueDateTime": "YYYY-MM-DDTHH:mm:ss" or null, "priority": true or false }',
+      '  ],',
+      '  "events": [',
+      '    { "eventName": "string", "registrationDeadline": "YYYY-MM-DD" or null, "registrationMethod": "string or empty string", "taskDueDateTime": "YYYY-MM-DDTHH:mm:ss" or null }',
+      '  ]',
       '}',
       "",
       "=== IMPORTANT ===",
@@ -2165,71 +2199,129 @@
       return;
     }
 
-    // ===== EVENT TYPE: create a "Register for..." task =====
-    if (parsed.type === "event") {
-      processEventResult(parsed);
-      return;
-    }
+    // ===== PROCESS ALL TYPES: event, todo_list, text_task, mixed =====
+    var allTasks = [];
+    var idCounter = 0;
+    var uploadDate = getTodayDate();
 
-    // ===== TODO_LIST or TEXT_TASK TYPE =====
-    var tasksArr = [];
-    try {
-      if (parsed.tasks && Array.isArray(parsed.tasks)) {
-        state.photoDate = parsed.photoDate || null;
-        tasksArr = parsed.tasks;
-      } else if (Array.isArray(parsed)) {
-        tasksArr = parsed;
+    // --- Helper: build event task objects from an event data object ---
+    function buildEventTask(ev) {
+      var eventName = (ev.eventName || "Unknown Event").trim();
+      var deadline = ev.registrationDeadline || null;
+      var regMethod = (ev.registrationMethod || "").trim();
+      var dueDateTimeStr;
+      var userDue = ev.taskDueDateTime || null;
+      if (userDue && /^\d{4}-\d{2}-\d{2}T/.test(userDue)) {
+        dueDateTimeStr = userDue;
       } else {
-        // Fall back to finding array directly
-        var arrStart = jsonStr.indexOf("[");
-        var arrEnd = jsonStr.lastIndexOf("]");
-        if (arrStart !== -1 && arrEnd !== -1) {
-          tasksArr = JSON.parse(jsonStr.substring(arrStart, arrEnd + 1));
+        var dueDate;
+        if (deadline && /^\d{4}-\d{2}-\d{2}$/.test(deadline)) {
+          dueDate = getPreviousDay(deadline);
+        } else {
+          dueDate = uploadDate;
         }
+        dueDateTimeStr = dueDate + "T21:00:00";
       }
-      if (!Array.isArray(tasksArr)) { throw new Error("Expected tasks array"); }
-    } catch(err) {
-      showToast("Could not parse AI response. You can add tasks manually.", "error");
-      state.tasks = [];
-      state.photoDate = null;
-      renderPhotoDate();
-      renderTasks();
-      addTaskBtn.style.display = "";
-      reviewActions.style.display = "flex";
-      return;
-    }
-
-    // Compute default due date from PhotoDate (next business day at 09:00)
-    var defaultDueDateTime = null;
-    if (state.photoDate && /^\d{4}-\d{2}-\d{2}$/.test(state.photoDate)) {
-      var nextBiz = getNextBusinessDay(state.photoDate);
-      defaultDueDateTime = nextBiz + "T09:00:00";
-    }
-
-    state.tasks = tasksArr.map(function(t, i) {
-      var due = t.dueDateTime || null;
-      // If no due date and we have a default, apply it
-      if (!due && defaultDueDateTime) {
-        due = defaultDueDateTime;
-      }
-      // Priority: trust LLM flag, but also double-check with local keyword match
-      var titleStr = t.title || "Untitled task";
-      var bodyStr = t.body || "";
-      // Prepend user instruction to body if provided
+      var dueDateOnly = dueDateTimeStr.substring(0, 10);
+      var reminderDateTime = dueDateOnly + "T21:00:00.0000000";
+      var bodyParts = [];
+      if (regMethod) { bodyParts.push("Registration: " + regMethod); }
+      if (deadline) { bodyParts.push("Registration deadline: " + deadline); }
       if (lastUserInstruction) {
-        bodyStr = (bodyStr ? bodyStr + "\n\n" : "") + "User note: " + lastUserInstruction;
+        bodyParts.push((bodyParts.length > 0 ? "\n" : "") + "User note: " + lastUserInstruction);
       }
-      var pri = (t.priority === true) || isPriorityTask(titleStr, bodyStr);
       return {
-        id: "task-" + Date.now() + "-" + i,
-        title: titleStr,
-        body: bodyStr,
-        dueDateTime: due,
-        priority: pri,
-        checked: pri,
-        synced: false
+        id: "task-" + Date.now() + "-" + (idCounter++),
+        title: "Register for " + eventName,
+        body: bodyParts.join("\n"),
+        dueDateTime: dueDateTimeStr,
+        priority: false,
+        checked: true,
+        synced: false,
+        isEvent: true,
+        reminderDateTime: reminderDateTime
       };
-    });
+    }
+
+    // --- Helper: build regular task objects from a tasks array ---
+    function buildRegularTasks(tasksArr, defaultDueDateTime) {
+      return tasksArr.map(function(t) {
+        var due = t.dueDateTime || null;
+        if (!due && defaultDueDateTime) { due = defaultDueDateTime; }
+        var titleStr = t.title || "Untitled task";
+        var bodyStr = t.body || "";
+        // Check priority BEFORE appending user instruction (to avoid false positives
+        // from other tasks' keywords appearing in the shared user instruction text)
+        var pri = (t.priority === true) || isPriorityTask(titleStr, bodyStr);
+        // Append user instruction to body after priority check
+        if (lastUserInstruction) {
+          bodyStr = (bodyStr ? bodyStr + "\n\n" : "") + "User note: " + lastUserInstruction;
+        }
+        return {
+          id: "task-" + Date.now() + "-" + (idCounter++),
+          title: titleStr,
+          body: bodyStr,
+          dueDateTime: due,
+          priority: pri,
+          checked: pri,
+          synced: false
+        };
+      });
+    }
+
+    // --- Route based on type ---
+    if (parsed.type === "mixed") {
+      // MIXED: contains both events and regular tasks
+      state.photoDate = parsed.photoDate || null;
+      var eventsArr = parsed.events || [];
+      var regTasksArr = parsed.tasks || [];
+      eventsArr.forEach(function(ev) { allTasks.push(buildEventTask(ev)); });
+      var defaultDue = null;
+      if (state.photoDate && /^\d{4}-\d{2}-\d{2}$/.test(state.photoDate)) {
+        defaultDue = getNextBusinessDay(state.photoDate) + "T09:00:00";
+      }
+      allTasks = allTasks.concat(buildRegularTasks(regTasksArr, defaultDue));
+
+    } else if (parsed.type === "event") {
+      // SINGLE EVENT (no regular tasks)
+      state.photoDate = null;
+      allTasks.push(buildEventTask(parsed));
+
+    } else {
+      // TODO_LIST or TEXT_TASK
+      var tasksArr = [];
+      try {
+        if (parsed.tasks && Array.isArray(parsed.tasks)) {
+          state.photoDate = parsed.photoDate || null;
+          tasksArr = parsed.tasks;
+        } else if (Array.isArray(parsed)) {
+          tasksArr = parsed;
+        } else {
+          var arrStart = jsonStr.indexOf("[");
+          var arrEnd = jsonStr.lastIndexOf("]");
+          if (arrStart !== -1 && arrEnd !== -1) {
+            tasksArr = JSON.parse(jsonStr.substring(arrStart, arrEnd + 1));
+          }
+        }
+        if (!Array.isArray(tasksArr)) { throw new Error("Expected tasks array"); }
+      } catch(err) {
+        showToast("Could not parse AI response. You can add tasks manually.", "error");
+        state.tasks = [];
+        state.photoDate = null;
+        renderPhotoDate();
+        renderTasks();
+        addTaskBtn.style.display = "";
+        reviewActions.style.display = "flex";
+        return;
+      }
+      var defaultDueDateTime = null;
+      if (state.photoDate && /^\d{4}-\d{2}-\d{2}$/.test(state.photoDate)) {
+        defaultDueDateTime = getNextBusinessDay(state.photoDate) + "T09:00:00";
+      }
+      allTasks = buildRegularTasks(tasksArr, defaultDueDateTime);
+    }
+
+    state.tasks = allTasks;
 
     showPhotoThumbnail();
 
@@ -2286,82 +2378,7 @@
     reviewActions.style.display = "flex";
   }
 
-  // ========== EVENT RESULT PROCESSING ==========
-  function processEventResult(parsed) {
-    var eventName = (parsed.eventName || "Unknown Event").trim();
-    var deadline = parsed.registrationDeadline || null; // YYYY-MM-DD or null
-    var regMethod = (parsed.registrationMethod || "").trim();
-    var uploadDate = getTodayDate();
-
-    // Due date priority:
-    // 1. If AI parsed a taskDueDateTime from user instruction → use it directly
-    // 2. Else if registration deadline found → 9pm on the day BEFORE the deadline
-    // 3. Else → 9pm on upload date
-    var dueDateTimeStr;
-    var userDue = parsed.taskDueDateTime || null;
-    if (userDue && /^\d{4}-\d{2}-\d{2}T/.test(userDue)) {
-      dueDateTimeStr = userDue;
-    } else {
-      var dueDate;
-      if (deadline && /^\d{4}-\d{2}-\d{2}$/.test(deadline)) {
-        dueDate = getPreviousDay(deadline);
-      } else {
-        dueDate = uploadDate;
-      }
-      dueDateTimeStr = dueDate + "T21:00:00";
-    }
-
-    // Reminder: 9pm of the task due date
-    var dueDateOnly = dueDateTimeStr.substring(0, 10);
-    var reminderDateTime = dueDateOnly + "T21:00:00.0000000";
-
-    // Build body/notes with registration info and user instruction
-    var bodyParts = [];
-    if (regMethod) {
-      bodyParts.push("Registration: " + regMethod);
-    }
-    if (deadline) {
-      bodyParts.push("Registration deadline: " + deadline);
-    }
-    if (lastUserInstruction) {
-      bodyParts.push((bodyParts.length > 0 ? "\n" : "") + "User note: " + lastUserInstruction);
-    }
-
-    var taskBody = bodyParts.join("\n");
-
-    // Create the event task
-    state.photoDate = null;
-    state.tasks = [{
-      id: "task-" + Date.now() + "-0",
-      title: "Register for " + eventName,
-      body: taskBody,
-      dueDateTime: dueDateTimeStr,
-      priority: false,
-      checked: true,
-      synced: false,
-      isEvent: true,
-      reminderDateTime: reminderDateTime
-    }];
-
-    showPhotoThumbnail();
-
-    // Lite Mode check for events
-    if (liteModeCheck.checked && lastInputHadText) {
-      // Text input present → auto-sync event
-      showToast("Lite mode: syncing event task — \"" + eventName + "\"…", "success");
-      liteModeSync(true);
-      return;
-    }
-
-    // Normal: manual review (photo-only events, or Lite Mode off)
-    updateStepper(3);
-    showSection("review");
-    renderPhotoDate();
-    renderTasks();
-    showToast("Event detected: \"" + eventName + "\". Review the task below.", "success");
-    addTaskBtn.style.display = "";
-    reviewActions.style.display = "flex";
-  }
+  // (Event processing is now handled inline in processExtractionResult via buildEventTask)
 
   // ========== LITE MODE SYNC ==========
   var LITE_PRIORITY_LIST_NAME = "Theo Quiz and Dictation";
@@ -2418,25 +2435,32 @@
 
       var priorityListId = null;
       var otherListId = null;
+      var eventListId = null;
 
       // Determine which types of tasks need syncing
       var checkedTasks = state.tasks.filter(function(t) { return t.checked && !t.synced && t.title.trim(); });
       var hasPriority = checkedTasks.some(function(t) { return t.priority; });
-      var hasOther = checkedTasks.some(function(t) { return !t.priority; });
+      var hasEvents = checkedTasks.some(function(t) { return t.isEvent; });
+      var hasRegularOther = checkedTasks.some(function(t) { return !t.priority && !t.isEvent; });
 
       // Find/create priority list if needed
       if (hasPriority) {
         priorityListId = await findOrCreateList(lists, LITE_PRIORITY_LIST_NAME);
       }
 
-      // Find/create other list if needed (only in syncAll mode)
-      if (syncAll && hasOther) {
-        var hasEvents = checkedTasks.some(function(t) { return t.isEvent; });
-        var otherName = hasEvents ? LITE_EVENT_LIST_NAME : LITE_OTHER_LIST_NAME;
-        otherListId = await findOrCreateList(lists, otherName);
+      // Find/create lists for non-priority tasks (only in syncAll mode)
+      if (syncAll) {
+        if (hasEvents) {
+          eventListId = await findOrCreateList(lists, LITE_EVENT_LIST_NAME);
+          // If no separate regular other tasks, events can also serve as otherListId
+          if (!hasRegularOther) { otherListId = eventListId; }
+        }
+        if (hasRegularOther) {
+          otherListId = await findOrCreateList(lists, LITE_OTHER_LIST_NAME);
+        }
       }
 
-      await executeSyncTasks(priorityListId, otherListId);
+      await executeSyncTasks(priorityListId, otherListId, eventListId);
     } catch(err) {
       showToast("Lite mode sync failed: " + err.message, "error");
       // Fall back to review section
@@ -2991,7 +3015,8 @@
   }
 
   // ========== SYNC EXECUTION (shared by modal confirm and lite mode) ==========
-  async function executeSyncTasks(priorityListId, otherListId) {
+  // eventListId is optional — if provided, event tasks route there instead of otherListId
+  async function executeSyncTasks(priorityListId, otherListId, eventListId) {
     updateStepper(4);
     showSection("sync");
     syncingCard.style.display = "";
@@ -3025,7 +3050,7 @@
 
     for (var i = 0; i < unsyncedTasks.length; i++) {
       var task = unsyncedTasks[i];
-      var listId = task.priority ? priorityListId : otherListId;
+      var listId = task.priority ? priorityListId : (task.isEvent && eventListId ? eventListId : otherListId);
       syncStatusText.textContent = "Creating task " + (i + 1) + " of " + total + "…";
       syncProgressBar.style.width = (((i + 1) / total) * 100) + "%";
 
