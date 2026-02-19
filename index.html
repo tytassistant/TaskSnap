@@ -1057,6 +1057,22 @@
         </div>
       </div>
 
+      <!-- Event registration tasks section -->
+      <div id="modalEventSection" style="display:none;">
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+          <i class="fas fa-ticket" style="color:var(--danger); font-size:13px;"></i>
+          <span style="font-size:13px; font-weight:700; color:var(--danger); text-transform:uppercase; letter-spacing:0.04em;" id="modalEventLabel">Event Registration (0)</span>
+        </div>
+        <div class="field" style="margin-bottom:8px;">
+          <select id="listSelectEvent">
+            <option value="">Loading lists…</option>
+          </select>
+        </div>
+        <div class="field" style="margin-bottom:16px;">
+          <input type="text" id="newListInputEvent" placeholder="Or create new list (optional)">
+        </div>
+      </div>
+
       <div class="modal-actions">
         <button class="btn btn-outline btn-sm" id="listModalCancel" type="button">Cancel</button>
         <button class="btn btn-primary btn-sm" id="listModalConfirm" type="button">
@@ -1202,10 +1218,14 @@
   var newListInputPriority = $id("newListInputPriority");
   var listSelectOther = $id("listSelectOther");
   var newListInputOther = $id("newListInputOther");
+  var listSelectEvent = $id("listSelectEvent");
+  var newListInputEvent = $id("newListInputEvent");
   var modalPrioritySection = $id("modalPrioritySection");
   var modalOtherSection = $id("modalOtherSection");
+  var modalEventSection = $id("modalEventSection");
   var modalPriorityLabel = $id("modalPriorityLabel");
   var modalOtherLabel = $id("modalOtherLabel");
+  var modalEventLabel = $id("modalEventLabel");
   var listModalCancel = $id("listModalCancel");
   var listModalConfirm = $id("listModalConfirm");
   var logoutBtn = $id("logoutBtn");
@@ -2263,7 +2283,7 @@
           body: bodyStr,
           dueDateTime: due,
           priority: pri,
-          checked: pri,
+          checked: lastInputHadText ? true : pri,
           synced: false
         };
       });
@@ -2901,11 +2921,12 @@
 
   // ========== LIST MODAL ==========
   function openListModal() {
-    // Count checked priority and other tasks
+    // Count checked tasks by category
     var checkedPriority = state.tasks.filter(function(t) { return t.checked && !t.synced && t.title.trim() && t.priority; });
-    var checkedOther = state.tasks.filter(function(t) { return t.checked && !t.synced && t.title.trim() && !t.priority; });
+    var checkedOther = state.tasks.filter(function(t) { return t.checked && !t.synced && t.title.trim() && !t.priority && !t.isEvent; });
+    var checkedEvent = state.tasks.filter(function(t) { return t.checked && !t.synced && t.title.trim() && t.isEvent; });
 
-    // Show/hide sections based on what's checked
+    // Show/hide sections based on what's checked (order: Priority → Other → Event)
     if (checkedPriority.length > 0) {
       modalPrioritySection.style.display = "";
       modalPriorityLabel.textContent = "Priority (" + checkedPriority.length + ")";
@@ -2920,6 +2941,14 @@
       newListInputOther.value = "";
     } else {
       modalOtherSection.style.display = "none";
+    }
+
+    if (checkedEvent.length > 0) {
+      modalEventSection.style.display = "";
+      modalEventLabel.textContent = "Event Registration (" + checkedEvent.length + ")";
+      newListInputEvent.value = "";
+    } else {
+      modalEventSection.style.display = "none";
     }
 
     listModal.classList.add("open");
@@ -2959,6 +2988,7 @@
     var loadingHtml = '<option value="">Loading…</option>';
     listSelectPriority.innerHTML = loadingHtml;
     listSelectOther.innerHTML = loadingHtml;
+    listSelectEvent.innerHTML = loadingHtml;
 
     try {
       var token = await getAccessToken();
@@ -2971,6 +3001,7 @@
           var errHtml = '<option value="">Auth error — re-authenticate</option>';
           listSelectPriority.innerHTML = errHtml;
           listSelectOther.innerHTML = errHtml;
+          listSelectEvent.innerHTML = errHtml;
           showToast(formatGraphError(detail), "error");
           return;
         }
@@ -2979,14 +3010,13 @@
       var data = await resp.json();
       state.lists = data.value || [];
       populateListSelect(listSelectPriority, state.lists, "Theo Quiz and Dictation");
-      // Default "Other" list to "Household Tasks" if any event tasks, otherwise "Theo Homework"
-      var hasEventTasks = state.tasks.some(function(t) { return t.isEvent && t.checked && !t.synced; });
-      var otherDefault = hasEventTasks ? "Household Tasks" : "Theo Homework";
-      populateListSelect(listSelectOther, state.lists, otherDefault);
+      populateListSelect(listSelectOther, state.lists, "Theo Homework");
+      populateListSelect(listSelectEvent, state.lists, "Household Tasks");
     } catch(err) {
       var errHtml2 = '<option value="">Error loading lists</option>';
       listSelectPriority.innerHTML = errHtml2;
       listSelectOther.innerHTML = errHtml2;
+      listSelectEvent.innerHTML = errHtml2;
       showToast("Could not load task lists: " + err.message, "error");
     }
   }
@@ -3184,6 +3214,7 @@
   listModalConfirm.addEventListener("click", async function() {
     var hasPriority = modalPrioritySection.style.display !== "none";
     var hasOther = modalOtherSection.style.display !== "none";
+    var hasEvent = modalEventSection.style.display !== "none";
 
     // Validate: each visible section needs a list selected or new name
     if (hasPriority && !listSelectPriority.value && !newListInputPriority.value.trim()) {
@@ -3194,12 +3225,17 @@
       showToast("Please select or create a list for other tasks", "error");
       return;
     }
+    if (hasEvent && !listSelectEvent.value && !newListInputEvent.value.trim()) {
+      showToast("Please select or create a list for event tasks", "error");
+      return;
+    }
 
     closeListModal();
 
     // Resolve list IDs (create new lists if needed)
     var priorityListId = null;
     var otherListId = null;
+    var eventListId = null;
 
     updateStepper(4);
     showSection("sync");
@@ -3216,6 +3252,10 @@
         syncStatusText.textContent = "Preparing other task list…";
         otherListId = await resolveListId(listSelectOther, newListInputOther);
       }
+      if (hasEvent) {
+        syncStatusText.textContent = "Preparing event task list…";
+        eventListId = await resolveListId(listSelectEvent, newListInputEvent);
+      }
     } catch(err) {
       showToast("Failed to create list: " + err.message, "error");
       updateStepper(3);
@@ -3223,7 +3263,7 @@
       return;
     }
 
-    await executeSyncTasks(priorityListId, otherListId);
+    await executeSyncTasks(priorityListId, otherListId, eventListId);
   });
 
   // ========== RE-AUTH BUTTON ==========
@@ -3273,6 +3313,7 @@
     taskList.innerHTML = "";
     newListInputPriority.value = "";
     newListInputOther.value = "";
+    newListInputEvent.value = "";
     updateStepper(2);
     showSection("upload");
   });
