@@ -959,13 +959,13 @@
           <div class="card-desc" style="margin-bottom:10px;"><i class="fas fa-lock" style="margin-right:4px;"></i> Set a PIN to save this key.</div>
           <div class="field" style="margin-bottom:8px;">
             <div class="pin-field-wrap">
-              <input type="text" id="pinSetInput" placeholder="Enter 6-character PIN" maxlength="6" autocomplete="one-time-code" data-form-type="other" data-lpignore="true" style="font-size:16px;">
+              <input type="text" id="pinSetInput" placeholder="Enter 6-character PIN" maxlength="6" autocomplete="nope" data-form-type="other" data-lpignore="true" style="font-size:16px;">
               <button type="button" class="pin-toggle-btn" data-target="pinSetInput" title="Show/hide PIN"><i class="fas fa-eye"></i></button>
             </div>
           </div>
           <div class="field" style="margin-bottom:4px;">
             <div class="pin-field-wrap">
-              <input type="text" id="pinConfirmInput" placeholder="Confirm PIN" maxlength="6" autocomplete="one-time-code" data-form-type="other" data-lpignore="true" style="font-size:16px;">
+              <input type="text" id="pinConfirmInput" placeholder="Confirm PIN" maxlength="6" autocomplete="nope" data-form-type="other" data-lpignore="true" style="font-size:16px;">
               <button type="button" class="pin-toggle-btn" data-target="pinConfirmInput" title="Show/hide PIN"><i class="fas fa-eye"></i></button>
             </div>
           </div>
@@ -982,7 +982,7 @@
         <div class="card-desc">Your key is saved. Enter your PIN to unlock.</div>
         <div class="field" style="margin-bottom:4px;">
           <div class="pin-field-wrap">
-            <input type="text" id="pinUnlockInput" placeholder="Enter 6-character PIN" maxlength="6" autocomplete="one-time-code" data-form-type="other" data-lpignore="true" style="font-size:16px;">
+            <input type="text" id="pinUnlockInput" placeholder="Enter 6-character PIN" maxlength="6" autocomplete="nope" data-form-type="other" data-lpignore="true" style="font-size:16px;">
             <button type="button" class="pin-toggle-btn" data-target="pinUnlockInput" title="Show/hide PIN"><i class="fas fa-eye"></i></button>
           </div>
           <div class="pin-error" id="pinUnlockError"></div>
@@ -2833,9 +2833,23 @@
 
     // --- Helper: build regular task objects from a tasks array ---
     function buildRegularTasks(tasksArr, defaultDueDateTime) {
+      // Extract default date portion for comparison (Lite Mode specific-date rule)
+      var defaultDatePortion = defaultDueDateTime ? defaultDueDateTime.split("T")[0] : null;
       return tasksArr.map(function(t) {
-        var due = t.dueDateTime || null;
+        var aiExplicitDue = t.dueDateTime || null;
+        var due = aiExplicitDue;
         if (!due && defaultDueDateTime) { due = defaultDueDateTime; }
+        // Determine if AI identified a specific date different from the default next business day
+        var hasSpecificDueDate = false;
+        if (aiExplicitDue) {
+          if (!defaultDatePortion) {
+            // No default date exists, but AI found a specific date — counts as specific
+            hasSpecificDueDate = true;
+          } else {
+            var aiDatePortion = aiExplicitDue.split("T")[0];
+            hasSpecificDueDate = (aiDatePortion !== defaultDatePortion);
+          }
+        }
         var titleStr = t.title || "Untitled task";
         var bodyStr = t.body || "";
         // Check priority BEFORE appending user instruction (to avoid false positives
@@ -2851,9 +2865,10 @@
           body: bodyStr,
           dueDateTime: due,
           priority: pri,
-          checked: lastInputHadText ? true : pri,
+          checked: lastInputHadText ? true : (pri || hasSpecificDueDate),
           synced: false,
-          listOverride: t.listOverride || null
+          listOverride: t.listOverride || null,
+          hasSpecificDueDate: hasSpecificDueDate
         };
       });
     }
@@ -2927,13 +2942,15 @@
 
       // Photo only
       var priTasks = state.tasks.filter(function(t) { return t.priority; });
-      if (priTasks.length === 0) {
-        // No priority tasks found — fall back to manual review
+      var dateSpecificTasks = state.tasks.filter(function(t) { return !t.priority && !t.isEvent && t.hasSpecificDueDate; });
+      var autoSyncCount = priTasks.length + dateSpecificTasks.length;
+      if (autoSyncCount === 0) {
+        // No priority or date-specific tasks found — fall back to manual review
         state.tasks.forEach(function(t) { t.checked = true; });
         updateStepper(3);
         showSection("review");
         extractionLoading.style.display = "none";
-        showToast("No priority tasks found. Showing full review.", "info");
+        showToast("No priority or date-specific tasks found. Showing full review.", "info");
         renderPhotoDate();
         renderTasks();
         addTaskBtn.style.display = "";
@@ -2941,10 +2958,12 @@
         return;
       }
 
-      // Photo only with priority tasks: sync priority only
-      var priCount = priTasks.length;
+      // Photo only with auto-sync tasks: sync priority + date-specific
       var totalCount = state.tasks.length;
-      showToast("Lite mode: " + priCount + " priority task" + (priCount > 1 ? "s" : "") + " of " + totalCount + " total — syncing now…", "success");
+      var toastParts = [];
+      if (priTasks.length > 0) { toastParts.push(priTasks.length + " priority"); }
+      if (dateSpecificTasks.length > 0) { toastParts.push(dateSpecificTasks.length + " date-specific"); }
+      showToast("Lite mode: " + toastParts.join(" + ") + " task" + (autoSyncCount > 1 ? "s" : "") + " of " + totalCount + " total — syncing now…", "success");
       liteModeSync(false);
       return;
     }
@@ -3045,14 +3064,25 @@
         listsUsed.push(LITE_PRIORITY_LIST_NAME);
       }
 
-      // Find/create lists for non-priority tasks (only in syncAll mode)
+      // Find/create lists for non-priority tasks
       if (syncAll) {
+        // syncAll mode: create lists for all task types
         if (hasEvents) {
           eventListId = await findOrCreateList(lists, LITE_EVENT_LIST_NAME);
           listsUsed.push(LITE_EVENT_LIST_NAME);
           if (!hasRegularOther) { otherListId = eventListId; }
         }
         if (hasRegularOther) {
+          otherListId = await findOrCreateList(lists, LITE_OTHER_LIST_NAME);
+          listsUsed.push(LITE_OTHER_LIST_NAME);
+        }
+      } else {
+        // Photo-only Lite Mode: also create the other list for non-priority/non-event tasks
+        // that have AI-identified specific due dates (different from next business day)
+        var hasDateSpecificOther = tasksWithoutOverride.some(function(t) {
+          return !t.priority && !t.isEvent && t.hasSpecificDueDate;
+        });
+        if (hasDateSpecificOther) {
           otherListId = await findOrCreateList(lists, LITE_OTHER_LIST_NAME);
           listsUsed.push(LITE_OTHER_LIST_NAME);
         }
