@@ -289,6 +289,19 @@
   .upload-zone p {
     font-size: 13px; color: var(--text-tertiary);
   }
+  .camera-btn-row {
+    display: flex; justify-content: center; margin-top: 10px;
+  }
+  .camera-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: 'Bricolage Grotesque', sans-serif;
+    font-size: 14px; font-weight: 600; color: var(--accent);
+    background: var(--accent-light); border: 1px solid var(--accent);
+    border-radius: var(--radius-sm); padding: 10px 18px;
+    cursor: pointer; transition: var(--transition);
+  }
+  .camera-btn:hover { background: var(--accent); color: #fff; }
+  .camera-btn i { font-size: 15px; }
   .upload-preview {
     position: relative; margin-top: 16px;
     border-radius: var(--radius-md); overflow: hidden;
@@ -672,6 +685,20 @@
   .modal-new-list-input:disabled {
     opacity: 0.4; cursor: not-allowed; background: var(--bg-secondary);
   }
+  .modal-task-list {
+    margin: 0 0 10px 0; padding: 0; list-style: none;
+  }
+  .modal-task-list li {
+    font-size: 12px; color: var(--text-secondary); line-height: 1.6;
+    padding-left: 12px; position: relative;
+  }
+  .modal-task-list li::before {
+    content: "•"; position: absolute; left: 0; color: var(--text-tertiary);
+  }
+  .modal-unchecked-note {
+    font-size: 11px; color: var(--text-tertiary); font-style: italic;
+    margin-bottom: 10px;
+  }
 
   /* Action bar */
   .action-bar {
@@ -841,7 +868,7 @@
       <div class="header-logo-icon"><i class="fas fa-camera-retro"></i></div>
       <h1>TaskSnap</h1>
     </div>
-    <p>Photograph your to-do list, sync it to Microsoft To&nbsp;Do</p>
+    <p>Photograph or type your to-do list, sync it to Microsoft To&nbsp;Do</p>
   </div>
 
   <!-- Stepper -->
@@ -929,7 +956,7 @@
           </div>
         </div>
         <div style="margin-top:4px; margin-bottom:8px;">
-          <div style="font-size:13px; font-weight:600; color:var(--text-secondary); margin-bottom:6px;"><i class="fas fa-lock" style="margin-right:4px;"></i> Set a PIN to save this key</div>
+          <div class="card-desc" style="margin-bottom:10px;"><i class="fas fa-lock" style="margin-right:4px;"></i> Set a PIN to save this key.</div>
           <div class="field" style="margin-bottom:8px;">
             <div class="pin-field-wrap">
               <input type="text" id="pinSetInput" placeholder="Enter 6-character PIN" maxlength="6" autocomplete="one-time-code" data-form-type="other" data-lpignore="true" style="font-size:16px;">
@@ -942,7 +969,7 @@
               <button type="button" class="pin-toggle-btn" data-target="pinConfirmInput" title="Show/hide PIN"><i class="fas fa-eye"></i></button>
             </div>
           </div>
-          <div class="hint">Alphanumeric, exactly 6 characters. Your key is encrypted locally — PIN is never stored.</div>
+          <div class="card-desc" style="margin-bottom:4px;">Alphanumeric, exactly 6 characters. Your key is encrypted locally — PIN is never stored.</div>
           <div class="pin-error" id="pinSetError"></div>
         </div>
         <div id="pinStateACancel" style="display:none; margin-bottom:8px;">
@@ -991,6 +1018,10 @@
         <div class="upload-icon"><i class="fas fa-cloud-arrow-up"></i></div>
         <h3>Tap to upload or drag &amp; drop</h3>
         <p>PNG, JPG, WebP — max 20 MB</p>
+      </div>
+      <div class="camera-btn-row" id="cameraRow">
+        <input type="file" id="cameraInput" accept="image/*" capture="environment" style="display:none;">
+        <button type="button" class="camera-btn" id="cameraBtn"><i class="fas fa-camera"></i> Take photo</button>
       </div>
 
       <div class="upload-preview" id="uploadPreview">
@@ -1165,6 +1196,8 @@
 
       <!-- No matching list sections (dynamically populated) -->
       <div id="modalUnmatchedSections"></div>
+
+      <div id="modalUncheckedNote"></div>
 
       <div class="modal-actions">
         <button class="btn btn-outline btn-sm" id="listModalCancel" type="button">Cancel</button>
@@ -2136,6 +2169,17 @@
     }
   });
 
+  // Camera input
+  var cameraInput = $id("cameraInput");
+  var cameraBtn = $id("cameraBtn");
+  var cameraRow = $id("cameraRow");
+  cameraBtn.addEventListener("click", function() { cameraInput.click(); });
+  cameraInput.addEventListener("change", function() {
+    if (cameraInput.files && cameraInput.files[0]) {
+      handleImageFile(cameraInput.files[0]);
+    }
+  });
+
   function handleImageFile(file) {
     if (!file.type.startsWith("image/")) {
       showToast("Please upload an image file", "error");
@@ -2152,6 +2196,7 @@
       previewImg.src = e.target.result;
       uploadPreview.style.display = "block";
       uploadZone.style.display = "none";
+      cameraRow.style.display = "none";
       updateExtractBtnState();
     };
     reader.readAsDataURL(file);
@@ -2163,7 +2208,9 @@
     previewImg.src = "";
     uploadPreview.style.display = "none";
     uploadZone.style.display = "";
+    cameraRow.style.display = "";
     imageInput.value = "";
+    cameraInput.value = "";
     updateExtractBtnState();
   });
 
@@ -3505,6 +3552,47 @@
   var modalCustomData = []; // { key, matchedListName, taskCount, selectEl }
   var modalUnmatchedData = []; // { key, rawName, suggestedName, taskCount, selectEl, inputEl }
 
+  // Helper: truncate title to ~40 chars with ellipsis
+  function truncateTitle(title, maxLen) {
+    maxLen = maxLen || 40;
+    if (!title) { return "Untitled task"; }
+    if (title.length <= maxLen) { return title; }
+    return title.substring(0, maxLen).trimEnd() + "…";
+  }
+
+  // Helper: build task list HTML for modal section
+  function buildModalTaskListHtml(tasks) {
+    var html = '<ul class="modal-task-list">';
+    tasks.forEach(function(t) {
+      html += "<li>" + escapeHtml(truncateTitle(t.title)) + "</li>";
+    });
+    html += "</ul>";
+    return html;
+  }
+
+  // Helper: build unchecked note HTML
+  function buildUncheckedNoteHtml(filterFn) {
+    var unchecked = state.tasks.filter(function(t) {
+      return !t.checked && !t.synced && t.title.trim() && filterFn(t);
+    });
+    if (unchecked.length === 0) { return ""; }
+    return '<div class="modal-unchecked-note">' + unchecked.length + ' unchecked task' + (unchecked.length > 1 ? 's' : '') + ' excluded</div>';
+  }
+
+  // Helper: inject task list into a static modal section (before the first .field)
+  function injectTaskListIntoSection(sectionEl, tasks, filterFn) {
+    // Remove any previously injected lists
+    var oldList = sectionEl.querySelector(".modal-task-list");
+    if (oldList) { oldList.remove(); }
+    var oldNote = sectionEl.querySelector(".modal-unchecked-note");
+    if (oldNote) { oldNote.remove(); }
+    // Insert after the label div (first child)
+    var labelDiv = sectionEl.querySelector("div");
+    if (labelDiv) {
+      labelDiv.insertAdjacentHTML("afterend", buildUncheckedNoteHtml(filterFn) + buildModalTaskListHtml(tasks));
+    }
+  }
+
   function openListModal() {
     // Count checked tasks by category — separate tasks WITH overrides from those without
     var checkedTasks = state.tasks.filter(function(t) { return t.checked && !t.synced && t.title.trim(); });
@@ -3530,6 +3618,7 @@
       modalPrioritySection.style.display = "";
       modalPriorityLabel.textContent = "Priority (" + checkedPriority.length + ")";
       newListInputPriority.value = "";
+      injectTaskListIntoSection(modalPrioritySection, checkedPriority, function(t) { return !t.listOverride && t.priority; });
     } else {
       modalPrioritySection.style.display = "none";
     }
@@ -3538,6 +3627,7 @@
       modalOtherSection.style.display = "";
       modalOtherLabel.textContent = "Other tasks (" + checkedOther.length + ")";
       newListInputOther.value = "";
+      injectTaskListIntoSection(modalOtherSection, checkedOther, function(t) { return !t.listOverride && !t.priority && !t.isEvent; });
     } else {
       modalOtherSection.style.display = "none";
     }
@@ -3546,6 +3636,7 @@
       modalEventSection.style.display = "";
       modalEventLabel.textContent = "Event registration (" + checkedEvent.length + ")";
       newListInputEvent.value = "";
+      injectTaskListIntoSection(modalEventSection, checkedEvent, function(t) { return !t.listOverride && t.isEvent; });
     } else {
       modalEventSection.style.display = "none";
     }
@@ -3558,6 +3649,15 @@
 
     // Store override groups for populating after list fetch
     state._overrideGroups = overrideGroups;
+
+    // Show global unchecked tasks note
+    var allUnchecked = state.tasks.filter(function(t) { return !t.checked && !t.synced && t.title.trim(); });
+    var uncheckedNoteEl = $id("modalUncheckedNote");
+    if (allUnchecked.length > 0) {
+      uncheckedNoteEl.innerHTML = '<div class="modal-unchecked-note">' + allUnchecked.length + ' unchecked task' + (allUnchecked.length > 1 ? 's' : '') + ' excluded from sync</div>';
+    } else {
+      uncheckedNoteEl.innerHTML = "";
+    }
 
     listModal.classList.add("open");
     fetchTaskLists();
@@ -3655,6 +3755,7 @@
             '<i class="fas fa-thumbtack" style="color:var(--accent);"></i>' +
             '<span class="custom-matched">Custom list: ' + escapeHtml(matched.displayName) + ' (' + taskCount + ')</span>' +
           '</div>' +
+          buildModalTaskListHtml(group.tasks) +
           '<div class="field" style="margin-bottom:8px;">' +
             '<select class="custom-list-select"></select>' +
           '</div>';
@@ -3679,6 +3780,7 @@
             '<i class="fas fa-triangle-exclamation" style="color:var(--danger);"></i>' +
             '<span class="custom-unmatched">No matching list found (' + taskCount + ')</span>' +
           '</div>' +
+          buildModalTaskListHtml(group.tasks) +
           '<div class="modal-unmatched-hint">The specified list "' + escapeHtml(group.rawName) + '" was not found. You can create it or pick an existing list.</div>' +
           '<div class="field" style="margin-bottom:8px;">' +
             '<select class="unmatched-list-select">' +
@@ -4045,7 +4147,9 @@
     previewImg.src = "";
     uploadPreview.style.display = "none";
     uploadZone.style.display = "";
+    cameraRow.style.display = "";
     imageInput.value = "";
+    cameraInput.value = "";
     // Reset smart input
     smartTextInput.value = "";
     smartPasteDataUrl = null;
