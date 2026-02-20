@@ -636,7 +636,7 @@
     cursor: pointer; font-size: 15px; padding: 4px; z-index: 2;
   }
   .pin-toggle-btn:hover { color: var(--accent); }
-  .pin-field-wrap input { padding-right: 44px; }
+  .pin-field-wrap input { padding-right: 44px; -webkit-text-security: none; text-security: none; }
   .pin-links { font-size: 12px; margin-top: 6px; display: flex; gap: 14px; }
   .pin-links a {
     color: var(--accent); cursor: pointer; text-decoration: none;
@@ -655,6 +655,23 @@
   }
   .confirm-box p { color: var(--text-primary); font-size: 14px; line-height: 1.5; margin-bottom: 16px; }
   .confirm-box .confirm-actions { display: flex; justify-content: flex-end; gap: 10px; }
+
+  .modal-custom-section { margin-bottom: 16px; }
+  .modal-custom-label {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+  }
+  .modal-custom-label i { font-size: 13px; }
+  .modal-custom-label span {
+    font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .modal-custom-label .custom-matched { color: var(--accent); }
+  .modal-custom-label .custom-unmatched { color: var(--danger); }
+  .modal-unmatched-hint {
+    font-size: 12px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;
+  }
+  .modal-new-list-input:disabled {
+    opacity: 0.4; cursor: not-allowed; background: var(--bg-secondary);
+  }
 
   /* Action bar */
   .action-bar {
@@ -915,13 +932,13 @@
           <div style="font-size:13px; font-weight:600; color:var(--text-secondary); margin-bottom:6px;"><i class="fas fa-lock" style="margin-right:4px;"></i> Set a PIN to save this key</div>
           <div class="field" style="margin-bottom:8px;">
             <div class="pin-field-wrap">
-              <input type="password" id="pinSetInput" placeholder="Enter 6-character PIN" maxlength="6" autocomplete="off" style="font-size:16px;">
+              <input type="text" id="pinSetInput" placeholder="Enter 6-character PIN" maxlength="6" autocomplete="one-time-code" data-form-type="other" data-lpignore="true" style="font-size:16px;">
               <button type="button" class="pin-toggle-btn" data-target="pinSetInput" title="Show/hide PIN"><i class="fas fa-eye"></i></button>
             </div>
           </div>
           <div class="field" style="margin-bottom:4px;">
             <div class="pin-field-wrap">
-              <input type="password" id="pinConfirmInput" placeholder="Confirm PIN" maxlength="6" autocomplete="off" style="font-size:16px;">
+              <input type="text" id="pinConfirmInput" placeholder="Confirm PIN" maxlength="6" autocomplete="one-time-code" data-form-type="other" data-lpignore="true" style="font-size:16px;">
               <button type="button" class="pin-toggle-btn" data-target="pinConfirmInput" title="Show/hide PIN"><i class="fas fa-eye"></i></button>
             </div>
           </div>
@@ -938,7 +955,7 @@
         <div class="card-desc">Your key is saved. Enter your PIN to unlock.</div>
         <div class="field" style="margin-bottom:4px;">
           <div class="pin-field-wrap">
-            <input type="password" id="pinUnlockInput" placeholder="Enter 6-character PIN" maxlength="6" autocomplete="off" style="font-size:16px;">
+            <input type="text" id="pinUnlockInput" placeholder="Enter 6-character PIN" maxlength="6" autocomplete="one-time-code" data-form-type="other" data-lpignore="true" style="font-size:16px;">
             <button type="button" class="pin-toggle-btn" data-target="pinUnlockInput" title="Show/hide PIN"><i class="fas fa-eye"></i></button>
           </div>
           <div class="pin-error" id="pinUnlockError"></div>
@@ -1142,6 +1159,12 @@
           <input type="text" id="newListInputEvent" placeholder="Or create new list (optional)">
         </div>
       </div>
+
+      <!-- Custom list override sections (dynamically populated) -->
+      <div id="modalCustomSections"></div>
+
+      <!-- No matching list sections (dynamically populated) -->
+      <div id="modalUnmatchedSections"></div>
 
       <div class="modal-actions">
         <button class="btn btn-outline btn-sm" id="listModalCancel" type="button">Cancel</button>
@@ -1606,8 +1629,8 @@
     pinStateA.style.display = "";
     pinStateB.style.display = "none";
     poeApiKeyInput.value = "";
-    pinSetInput.value = "";
-    pinConfirmInput.value = "";
+    if (pinSetInput._autoMask) { pinSetInput._autoMask.clear(); } else { pinSetInput.value = ""; }
+    if (pinConfirmInput._autoMask) { pinConfirmInput._autoMask.clear(); } else { pinConfirmInput.value = ""; }
     showPinError(pinSetError, "");
     if (isChange) {
       pinStateADesc.innerHTML = "Enter a new API key and set a new PIN.";
@@ -1621,7 +1644,7 @@
   function switchToPinStateB() {
     pinStateA.style.display = "none";
     pinStateB.style.display = "";
-    pinUnlockInput.value = "";
+    if (pinUnlockInput._autoMask) { pinUnlockInput._autoMask.clear(); } else { pinUnlockInput.value = ""; }
     showPinError(pinUnlockError, "");
   }
 
@@ -2322,6 +2345,24 @@
   var lastUserInstruction = "";
   // Track input mode at extraction time for Lite Mode decisions
   var lastInputHadText = false;
+  // Cache of user's To Do list names for AI prompt (fetched fresh each extraction)
+  var cachedListNames = [];
+
+  // Fetch user's To Do lists fresh before each extraction
+  async function fetchListNamesForPrompt() {
+    try {
+      var token = await getAccessToken();
+      var resp = await fetch("https://graph.microsoft.com/v1.0/me/todo/lists", {
+        headers: { Authorization: "Bearer " + token }
+      });
+      if (!resp.ok) { return []; }
+      var data = await resp.json();
+      var lists = data.value || [];
+      return lists.map(function(l) { return l.displayName; });
+    } catch(err) {
+      return [];
+    }
+  }
 
   extractBtn.addEventListener("click", function() {
     var hasPhoto = !!state.photoDataUrl;
@@ -2341,7 +2382,7 @@
       syncingCard.style.display = "";
       syncDoneCard.style.display = "none";
       syncProgressBar.style.width = "0%";
-      syncStatusText.textContent = "Extracting tasks…";
+      syncStatusText.textContent = "Fetching task lists…";
     } else {
       updateStepper(3);
       showSection("review");
@@ -2351,8 +2392,43 @@
       reviewActions.style.display = "none";
     }
 
+    // Fetch lists first, then build prompt
+    (async function() {
+      try {
+        cachedListNames = await fetchListNamesForPrompt();
+      } catch(ignored) {
+        cachedListNames = [];
+      }
+
+      if (liteModeCheck.checked) {
+        syncStatusText.textContent = "Extracting tasks…";
+      }
+
+      buildAndSendPrompt(hasPhoto, userText);
+    })();
+  });
+
+  function buildAndSendPrompt(hasPhoto, userText) {
     // Build the prompt based on what inputs are provided
     var todayDate = getTodayDate();
+
+    // Build list override instruction block
+    var listOverrideBlock = [];
+    if (cachedListNames.length > 0) {
+      listOverrideBlock = [
+        "",
+        "=== LIST OVERRIDE ===",
+        "The user has the following task lists available: " + JSON.stringify(cachedListNames),
+        "",
+        "If the user specifies which list a task should go to (e.g. 'english exam (quiz list)', 'put homework in household list', 'put all exams in quiz list'), you MUST set a \"listOverride\" field on each affected task or event.",
+        "- Match the user's words to the closest list name from the available lists above.",
+        "- If the user says something like 'put all in X list' or 'put everything in X', apply the override to ALL tasks/events.",
+        "- If the user specifies overrides for some tasks but not others, only set listOverride on the specified tasks. Tasks without explicit list instructions should have listOverride set to null.",
+        "- If you cannot confidently match the user's words to any available list, set listOverride to the user's words as-is (e.g. \"work list\").",
+        "- The listOverride field should contain the EXACT list name from the available lists when a match is found, or the user's raw words when no match is found.",
+        ""
+      ];
+    }
 
     // Base vision prompt for images (todo list + event detection + mixed)
     var imagePromptLines = [
@@ -2394,7 +2470,8 @@
       '      "title": "string",',
       '      "body": "string (additional details; empty string if none)",',
       '      "dueDateTime": "YYYY-MM-DDTHH:mm:ss" or null,',
-      '      "priority": true or false',
+      '      "priority": true or false,',
+      '      "listOverride": "exact list name" or null',
       '    }',
       '  ]',
       '}',
@@ -2414,7 +2491,8 @@
       '  "eventName": "string",',
       '  "registrationDeadline": "YYYY-MM-DD" or null,',
       '  "registrationMethod": "string or empty string",',
-      '  "taskDueDateTime": "YYYY-MM-DDTHH:mm:ss" or null',
+      '  "taskDueDateTime": "YYYY-MM-DDTHH:mm:ss" or null,',
+      '  "listOverride": "exact list name" or null',
       '}',
       "",
       '--- If MIXED (image has an event AND user instruction mentions additional tasks, or vice versa) ---',
@@ -2430,7 +2508,8 @@
       '      "title": "string",',
       '      "body": "string (additional details; empty string if none)",',
       '      "dueDateTime": "YYYY-MM-DDTHH:mm:ss" or null,',
-      '      "priority": true or false',
+      '      "priority": true or false,',
+      '      "listOverride": "exact list name" or null',
       '    }',
       '  ],',
       '  "events": [',
@@ -2438,15 +2517,19 @@
       '      "eventName": "string",',
       '      "registrationDeadline": "YYYY-MM-DD" or null,',
       '      "registrationMethod": "string or empty string",',
-      '      "taskDueDateTime": "YYYY-MM-DDTHH:mm:ss" or null',
+      '      "taskDueDateTime": "YYYY-MM-DDTHH:mm:ss" or null,',
+      '      "listOverride": "exact list name" or null',
       '    }',
       '  ]',
       '}',
       "Apply the same PRIORITY DETECTION and DATE PARSING rules to the tasks array.",
-      "",
-      "=== IMPORTANT ===",
-      "Return ONLY a valid JSON object (no other text, no markdown code blocks)."
+      ""
     ];
+
+    // Append list override block if available
+    imagePromptLines = imagePromptLines.concat(listOverrideBlock);
+    imagePromptLines.push("=== IMPORTANT ===");
+    imagePromptLines.push("Return ONLY a valid JSON object (no other text, no markdown code blocks).");
 
     // Text-only prompt (no image)
     var textOnlyPromptLines = [
@@ -2478,7 +2561,7 @@
       '{',
       '  "type": "text_task",',
       '  "tasks": [',
-      '    { "title": "string", "body": "string", "dueDateTime": "YYYY-MM-DDTHH:mm:ss" or null, "priority": true or false }',
+      '    { "title": "string", "body": "string", "dueDateTime": "YYYY-MM-DDTHH:mm:ss" or null, "priority": true or false, "listOverride": "exact list name" or null }',
       '  ]',
       '}',
       "",
@@ -2488,23 +2571,27 @@
       '  "eventName": "string",',
       '  "registrationDeadline": "YYYY-MM-DD" or null,',
       '  "registrationMethod": "string or empty string",',
-      '  "taskDueDateTime": "YYYY-MM-DDTHH:mm:ss" or null',
+      '  "taskDueDateTime": "YYYY-MM-DDTHH:mm:ss" or null,',
+      '  "listOverride": "exact list name" or null',
       '}',
       "",
       "If the input contains BOTH events AND regular tasks:",
       '{',
       '  "type": "mixed",',
       '  "tasks": [',
-      '    { "title": "string", "body": "string", "dueDateTime": "YYYY-MM-DDTHH:mm:ss" or null, "priority": true or false }',
+      '    { "title": "string", "body": "string", "dueDateTime": "YYYY-MM-DDTHH:mm:ss" or null, "priority": true or false, "listOverride": "exact list name" or null }',
       '  ],',
       '  "events": [',
-      '    { "eventName": "string", "registrationDeadline": "YYYY-MM-DD" or null, "registrationMethod": "string or empty string", "taskDueDateTime": "YYYY-MM-DDTHH:mm:ss" or null }',
+      '    { "eventName": "string", "registrationDeadline": "YYYY-MM-DD" or null, "registrationMethod": "string or empty string", "taskDueDateTime": "YYYY-MM-DDTHH:mm:ss" or null, "listOverride": "exact list name" or null }',
       '  ]',
       '}',
-      "",
-      "=== IMPORTANT ===",
-      "Return ONLY a valid JSON object (no other text, no markdown code blocks)."
+      ""
     ];
+
+    // Append list override block if available
+    textOnlyPromptLines = textOnlyPromptLines.concat(listOverrideBlock);
+    textOnlyPromptLines.push("=== IMPORTANT ===");
+    textOnlyPromptLines.push("Return ONLY a valid JSON object (no other text, no markdown code blocks).");
 
     // Determine which prompt and content to send
     var promptText;
@@ -2593,7 +2680,7 @@
         addTaskBtn.style.display = "";
       }
     })();
-  });
+  }
 
   // Helper: get today's date as YYYY-MM-DD in local time
   function getTodayDate() {
@@ -2682,7 +2769,8 @@
         checked: true,
         synced: false,
         isEvent: true,
-        reminderDateTime: reminderDateTime
+        reminderDateTime: reminderDateTime,
+        listOverride: ev.listOverride || null
       };
     }
 
@@ -2707,7 +2795,8 @@
           dueDateTime: due,
           priority: pri,
           checked: lastInputHadText ? true : pri,
-          synced: false
+          synced: false,
+          listOverride: t.listOverride || null
         };
       });
     }
@@ -2879,31 +2968,66 @@
       var priorityListId = null;
       var otherListId = null;
       var eventListId = null;
+      var overrideListIds = {};
+      var listsUsed = []; // Track list names for toast
 
       // Determine which types of tasks need syncing
       var checkedTasks = state.tasks.filter(function(t) { return t.checked && !t.synced && t.title.trim(); });
-      var hasPriority = checkedTasks.some(function(t) { return t.priority; });
-      var hasEvents = checkedTasks.some(function(t) { return t.isEvent; });
-      var hasRegularOther = checkedTasks.some(function(t) { return !t.priority && !t.isEvent; });
+
+      // Separate tasks with overrides from those without
+      var tasksWithOverride = checkedTasks.filter(function(t) { return !!t.listOverride; });
+      var tasksWithoutOverride = checkedTasks.filter(function(t) { return !t.listOverride; });
+
+      var hasPriority = tasksWithoutOverride.some(function(t) { return t.priority; });
+      var hasEvents = tasksWithoutOverride.some(function(t) { return t.isEvent; });
+      var hasRegularOther = tasksWithoutOverride.some(function(t) { return !t.priority && !t.isEvent; });
 
       // Find/create priority list if needed
       if (hasPriority) {
         priorityListId = await findOrCreateList(lists, LITE_PRIORITY_LIST_NAME);
+        listsUsed.push(LITE_PRIORITY_LIST_NAME);
       }
 
       // Find/create lists for non-priority tasks (only in syncAll mode)
       if (syncAll) {
         if (hasEvents) {
           eventListId = await findOrCreateList(lists, LITE_EVENT_LIST_NAME);
-          // If no separate regular other tasks, events can also serve as otherListId
+          listsUsed.push(LITE_EVENT_LIST_NAME);
           if (!hasRegularOther) { otherListId = eventListId; }
         }
         if (hasRegularOther) {
           otherListId = await findOrCreateList(lists, LITE_OTHER_LIST_NAME);
+          listsUsed.push(LITE_OTHER_LIST_NAME);
         }
       }
 
-      await executeSyncTasks(priorityListId, otherListId, eventListId);
+      // Resolve override list IDs — auto-create via findOrCreateList
+      var processedOverrideKeys = {};
+      for (var oi = 0; oi < tasksWithOverride.length; oi++) {
+        var overrideKey = tasksWithOverride[oi].listOverride.toLowerCase().trim();
+        if (processedOverrideKeys[overrideKey]) { continue; }
+        processedOverrideKeys[overrideKey] = true;
+
+        var overrideName = tasksWithOverride[oi].listOverride;
+        // Try to match against existing lists
+        var matchedList = matchListOverride(overrideName, lists);
+        var resolvedName = matchedList ? matchedList.displayName : capitalizeFirstLetter(overrideName.trim());
+        syncStatusText.textContent = "Preparing \"" + resolvedName + "\" list…";
+        var resolvedId = await findOrCreateList(lists, resolvedName);
+        overrideListIds[overrideKey] = resolvedId;
+        listsUsed.push(resolvedName);
+      }
+
+      await executeSyncTasks(priorityListId, otherListId, eventListId, overrideListIds);
+
+      // Show toast with lists used
+      if (listsUsed.length > 0) {
+        var uniqueLists = [];
+        listsUsed.forEach(function(n) {
+          if (uniqueLists.indexOf(n) === -1) { uniqueLists.push(n); }
+        });
+        showToast("Synced to: " + uniqueLists.join(", "), "success");
+      }
     } catch(err) {
       showToast("Lite mode sync failed: " + err.message, "error");
       // Fall back to review section
@@ -2971,6 +3095,11 @@
     var dueDateDisplay = dueDateOnly ? formatDateDisplay(dueDateOnly) : "";
     var checkedAttr = task.checked ? " checked" : "";
 
+    var listBadgeHtml = "";
+    if (task.listOverride) {
+      listBadgeHtml = '<div style="margin-top:4px;"><span style="display:inline-block;font-size:11px;padding:2px 8px;border-radius:10px;background:var(--accent-light);color:var(--accent);font-weight:600;"><i class="fas fa-list" style="margin-right:4px;"></i>' + escapeHtml(task.listOverride) + '</span></div>';
+    }
+
     card.innerHTML =
       '<div class="task-card-header">' +
         '<input type="checkbox" class="task-check" data-idx="' + idx + '"' + checkedAttr + '>' +
@@ -2990,7 +3119,8 @@
           '<input type="time" data-idx="' + idx + '" data-field="dueTime" value="' + escapeAttr(dueTimeOnly) + '" style="margin-left:4px;">' +
           '<div class="cal-popup" data-cal-idx="' + idx + '"></div>' +
         '</div>' +
-      '</div>';
+      '</div>' +
+      listBadgeHtml;
 
     return card;
   }
@@ -3343,13 +3473,49 @@
   });
 
   // ========== LIST MODAL ==========
-  function openListModal() {
-    // Count checked tasks by category
-    var checkedPriority = state.tasks.filter(function(t) { return t.checked && !t.synced && t.title.trim() && t.priority; });
-    var checkedOther = state.tasks.filter(function(t) { return t.checked && !t.synced && t.title.trim() && !t.priority && !t.isEvent; });
-    var checkedEvent = state.tasks.filter(function(t) { return t.checked && !t.synced && t.title.trim() && t.isEvent; });
+  // Helper: match a listOverride string against available lists
+  function matchListOverride(overrideName, lists) {
+    if (!overrideName) { return null; }
+    var lower = overrideName.toLowerCase();
+    for (var i = 0; i < lists.length; i++) {
+      if (lists[i].displayName.toLowerCase() === lower) {
+        return lists[i];
+      }
+    }
+    return null;
+  }
 
-    // Show/hide sections based on what's checked (order: Priority → Other → Event)
+  // Helper: capitalize first letter of each word
+  function capitalizeFirstLetter(str) {
+    if (!str) { return str; }
+    return str.replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+  }
+
+  // Track dynamic modal sections for custom/unmatched lists
+  var modalCustomData = []; // { key, matchedListName, taskCount, selectEl }
+  var modalUnmatchedData = []; // { key, rawName, suggestedName, taskCount, selectEl, inputEl }
+
+  function openListModal() {
+    // Count checked tasks by category — separate tasks WITH overrides from those without
+    var checkedTasks = state.tasks.filter(function(t) { return t.checked && !t.synced && t.title.trim(); });
+
+    // Tasks WITHOUT overrides: categorize normally
+    var checkedPriority = checkedTasks.filter(function(t) { return !t.listOverride && t.priority; });
+    var checkedOther = checkedTasks.filter(function(t) { return !t.listOverride && !t.priority && !t.isEvent; });
+    var checkedEvent = checkedTasks.filter(function(t) { return !t.listOverride && t.isEvent; });
+
+    // Tasks WITH overrides: group by listOverride value
+    var overrideTasks = checkedTasks.filter(function(t) { return !!t.listOverride; });
+    var overrideGroups = {};
+    overrideTasks.forEach(function(t) {
+      var key = t.listOverride.toLowerCase().trim();
+      if (!overrideGroups[key]) {
+        overrideGroups[key] = { rawName: t.listOverride, tasks: [] };
+      }
+      overrideGroups[key].tasks.push(t);
+    });
+
+    // Show/hide standard sections (order: Priority → Other → Event)
     if (checkedPriority.length > 0) {
       modalPrioritySection.style.display = "";
       modalPriorityLabel.textContent = "Priority (" + checkedPriority.length + ")";
@@ -3360,7 +3526,7 @@
 
     if (checkedOther.length > 0) {
       modalOtherSection.style.display = "";
-      modalOtherLabel.textContent = "Other Tasks (" + checkedOther.length + ")";
+      modalOtherLabel.textContent = "Other tasks (" + checkedOther.length + ")";
       newListInputOther.value = "";
     } else {
       modalOtherSection.style.display = "none";
@@ -3368,11 +3534,20 @@
 
     if (checkedEvent.length > 0) {
       modalEventSection.style.display = "";
-      modalEventLabel.textContent = "Event Registration (" + checkedEvent.length + ")";
+      modalEventLabel.textContent = "Event registration (" + checkedEvent.length + ")";
       newListInputEvent.value = "";
     } else {
       modalEventSection.style.display = "none";
     }
+
+    // Clear dynamic sections
+    $id("modalCustomSections").innerHTML = "";
+    $id("modalUnmatchedSections").innerHTML = "";
+    modalCustomData = [];
+    modalUnmatchedData = [];
+
+    // Store override groups for populating after list fetch
+    state._overrideGroups = overrideGroups;
 
     listModal.classList.add("open");
     fetchTaskLists();
@@ -3435,6 +3610,9 @@
       populateListSelect(listSelectPriority, state.lists, "Theo Quiz and Dictation");
       populateListSelect(listSelectOther, state.lists, "Theo Homework");
       populateListSelect(listSelectEvent, state.lists, "Household Tasks");
+
+      // Build dynamic custom/unmatched sections from override groups
+      buildOverrideSections(state.lists);
     } catch(err) {
       var errHtml2 = '<option value="">Error loading lists</option>';
       listSelectPriority.innerHTML = errHtml2;
@@ -3442,6 +3620,97 @@
       listSelectEvent.innerHTML = errHtml2;
       showToast("Could not load task lists: " + err.message, "error");
     }
+  }
+
+  function buildOverrideSections(lists) {
+    var overrideGroups = state._overrideGroups || {};
+    var customContainer = $id("modalCustomSections");
+    var unmatchedContainer = $id("modalUnmatchedSections");
+    customContainer.innerHTML = "";
+    unmatchedContainer.innerHTML = "";
+    modalCustomData = [];
+    modalUnmatchedData = [];
+
+    Object.keys(overrideGroups).forEach(function(key) {
+      var group = overrideGroups[key];
+      var matched = matchListOverride(group.rawName, lists);
+      var taskCount = group.tasks.length;
+
+      if (matched) {
+        // === MATCHED: Custom list section ===
+        var section = document.createElement("div");
+        section.className = "modal-custom-section";
+        section.innerHTML =
+          '<div class="modal-custom-label">' +
+            '<i class="fas fa-thumbtack" style="color:var(--accent);"></i>' +
+            '<span class="custom-matched">Custom list: ' + escapeHtml(matched.displayName) + ' (' + taskCount + ')</span>' +
+          '</div>' +
+          '<div class="field" style="margin-bottom:8px;">' +
+            '<select class="custom-list-select"></select>' +
+          '</div>';
+        customContainer.appendChild(section);
+
+        var selectEl = section.querySelector(".custom-list-select");
+        populateListSelect(selectEl, lists, matched.displayName);
+
+        modalCustomData.push({
+          key: key,
+          matchedListName: matched.displayName,
+          taskCount: taskCount,
+          selectEl: selectEl
+        });
+      } else {
+        // === UNMATCHED: No matching list section ===
+        var suggestedName = capitalizeFirstLetter(group.rawName.trim());
+        var section2 = document.createElement("div");
+        section2.className = "modal-custom-section";
+        section2.innerHTML =
+          '<div class="modal-custom-label">' +
+            '<i class="fas fa-triangle-exclamation" style="color:var(--danger);"></i>' +
+            '<span class="custom-unmatched">No matching list found (' + taskCount + ')</span>' +
+          '</div>' +
+          '<div class="modal-unmatched-hint">The specified list "' + escapeHtml(group.rawName) + '" was not found. You can create it or pick an existing list.</div>' +
+          '<div class="field" style="margin-bottom:8px;">' +
+            '<select class="unmatched-list-select">' +
+              '<option value="__create__">Create new list</option>' +
+            '</select>' +
+          '</div>' +
+          '<div class="field" style="margin-bottom:16px;">' +
+            '<input type="text" class="modal-new-list-input" value="' + escapeAttr(suggestedName) + '" placeholder="New list name">' +
+          '</div>';
+        unmatchedContainer.appendChild(section2);
+
+        var selectEl2 = section2.querySelector(".unmatched-list-select");
+        var inputEl = section2.querySelector(".modal-new-list-input");
+
+        // Add existing lists as options after "Create new list"
+        lists.forEach(function(list) {
+          var opt = document.createElement("option");
+          opt.value = list.id;
+          opt.textContent = list.displayName;
+          selectEl2.appendChild(opt);
+        });
+
+        // Toggle input enabled/disabled based on dropdown
+        selectEl2.addEventListener("change", function() {
+          if (selectEl2.value === "__create__") {
+            inputEl.disabled = false;
+            inputEl.style.opacity = "";
+          } else {
+            inputEl.disabled = true;
+          }
+        });
+
+        modalUnmatchedData.push({
+          key: key,
+          rawName: group.rawName,
+          suggestedName: suggestedName,
+          taskCount: taskCount,
+          selectEl: selectEl2,
+          inputEl: inputEl
+        });
+      }
+    });
   }
 
   // Helper: resolve a list ID from a select + new-name input pair
@@ -3469,7 +3738,8 @@
 
   // ========== SYNC EXECUTION (shared by modal confirm and lite mode) ==========
   // eventListId is optional — if provided, event tasks route there instead of otherListId
-  async function executeSyncTasks(priorityListId, otherListId, eventListId) {
+  // overrideListIds is optional — map of override key → list ID for custom/unmatched overrides
+  async function executeSyncTasks(priorityListId, otherListId, eventListId, overrideListIds) {
     updateStepper(4);
     showSection("sync");
     syncingCard.style.display = "";
@@ -3503,7 +3773,15 @@
 
     for (var i = 0; i < unsyncedTasks.length; i++) {
       var task = unsyncedTasks[i];
-      var listId = task.priority ? priorityListId : (task.isEvent && eventListId ? eventListId : otherListId);
+      // Determine target list: override takes precedence, then normal routing
+      var listId;
+      if (task.listOverride && overrideListIds) {
+        var overrideKey = task.listOverride.toLowerCase().trim();
+        listId = overrideListIds[overrideKey] || null;
+      }
+      if (!listId) {
+        listId = task.priority ? priorityListId : (task.isEvent && eventListId ? eventListId : otherListId);
+      }
       syncStatusText.textContent = "Creating task " + (i + 1) + " of " + total + "…";
       syncProgressBar.style.width = (((i + 1) / total) * 100) + "%";
 
@@ -3653,12 +3931,23 @@
       return;
     }
 
+    // Validate unmatched sections: if "Create new list" is selected, need a name
+    for (var u = 0; u < modalUnmatchedData.length; u++) {
+      var um = modalUnmatchedData[u];
+      if (um.selectEl.value === "__create__" && !um.inputEl.value.trim()) {
+        showToast("Please enter a name for the new list", "error");
+        return;
+      }
+    }
+
     closeListModal();
 
     // Resolve list IDs (create new lists if needed)
     var priorityListId = null;
     var otherListId = null;
     var eventListId = null;
+    // Map: override key → resolved list ID
+    var overrideListIds = {};
 
     updateStepper(4);
     showSection("sync");
@@ -3679,6 +3968,28 @@
         syncStatusText.textContent = "Preparing event task list…";
         eventListId = await resolveListId(listSelectEvent, newListInputEvent);
       }
+
+      // Resolve custom list sections (matched overrides)
+      for (var c = 0; c < modalCustomData.length; c++) {
+        var cd = modalCustomData[c];
+        syncStatusText.textContent = "Preparing \"" + cd.matchedListName + "\" list…";
+        overrideListIds[cd.key] = cd.selectEl.value;
+      }
+
+      // Resolve unmatched list sections
+      for (var u2 = 0; u2 < modalUnmatchedData.length; u2++) {
+        var umd = modalUnmatchedData[u2];
+        if (umd.selectEl.value === "__create__") {
+          // Create new list
+          var newName = umd.inputEl.value.trim();
+          syncStatusText.textContent = "Creating \"" + newName + "\" list…";
+          var newListId = await findOrCreateList(state.lists || [], newName);
+          overrideListIds[umd.key] = newListId;
+        } else {
+          // Use existing selected list
+          overrideListIds[umd.key] = umd.selectEl.value;
+        }
+      }
     } catch(err) {
       showToast("Failed to create list: " + err.message, "error");
       updateStepper(3);
@@ -3686,7 +3997,7 @@
       return;
     }
 
-    await executeSyncTasks(priorityListId, otherListId, eventListId);
+    await executeSyncTasks(priorityListId, otherListId, eventListId, overrideListIds);
   });
 
   // ========== RE-AUTH BUTTON ==========
@@ -3737,6 +4048,11 @@
     newListInputPriority.value = "";
     newListInputOther.value = "";
     newListInputEvent.value = "";
+    $id("modalCustomSections").innerHTML = "";
+    $id("modalUnmatchedSections").innerHTML = "";
+    modalCustomData = [];
+    modalUnmatchedData = [];
+    cachedListNames = [];
     updateStepper(2);
     showSection("upload");
   });
