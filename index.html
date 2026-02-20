@@ -3784,7 +3784,7 @@
     for (var i = 0; i < unsyncedTasks.length; i++) {
       var task = unsyncedTasks[i];
       // Determine target list: override takes precedence, then normal routing
-      var listId;
+      var listId = null;
       if (task.listOverride && overrideListIds) {
         var overrideKey = task.listOverride.toLowerCase().trim();
         listId = overrideListIds[overrideKey] || null;
