@@ -472,10 +472,10 @@
   .cal-trigger:hover { background: var(--accent-glow); }
   .cal-trigger .placeholder { color: var(--text-tertiary); }
   .cal-popup {
-    position: fixed; z-index: 9998;
+    position: absolute; z-index: 100;
     background: var(--bg-card); border: 1px solid var(--border-strong);
     border-radius: var(--radius-md); box-shadow: var(--shadow-lg);
-    padding: 12px; max-width: 320px; width: calc(100% - 32px);
+    padding: 12px; width: 280px;
     display: none;
   }
   .cal-popup.open { display: block; }
@@ -2791,15 +2791,6 @@
     var idCounter = 0;
     var uploadDate = getTodayDate();
 
-    // --- Helper: format date string as d-Mmm for title suffixes ---
-    function formatDateSuffix(dateStr) {
-      if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) { return ""; }
-      var parts = dateStr.split("-");
-      var d = parseInt(parts[2], 10);
-      var m = parseInt(parts[1], 10) - 1;
-      return d + "-" + MONTH_NAMES[m].substring(0, 3);
-    }
-
     // --- Helper: build event task objects from an event data object ---
     function buildEventTask(ev) {
       var eventName = (ev.eventName || "Unknown Event").trim();
@@ -2826,10 +2817,9 @@
       if (lastUserInstruction) {
         bodyParts.push((bodyParts.length > 0 ? "\n" : "") + "User note: " + lastUserInstruction);
       }
-      var deadlineSuffix = deadline ? " (" + formatDateSuffix(deadline) + ")" : "";
       return {
         id: "task-" + Date.now() + "-" + (idCounter++),
-        title: "Register for " + eventName + deadlineSuffix,
+        title: "Register for " + eventName,
         body: bodyParts.join("\n"),
         dueDateTime: dueDateTimeStr,
         priority: false,
@@ -2860,11 +2850,6 @@
             hasSpecificDueDate = (aiDatePortion !== defaultDatePortion);
           }
         }
-        // When AI identifies a specific date: set due to 1 day prior at 21:00, and append date to title
-        if (hasSpecificDueDate) {
-          var aiDatePart = aiExplicitDue.split("T")[0];
-          due = getPreviousDay(aiDatePart) + "T21:00:00";
-        }
         var titleStr = t.title || "Untitled task";
         var bodyStr = t.body || "";
         // Check priority BEFORE appending user instruction (to avoid false positives
@@ -2874,11 +2859,9 @@
         if (lastUserInstruction) {
           bodyStr = (bodyStr ? bodyStr + "\n\n" : "") + "User note: " + lastUserInstruction;
         }
-        // Append identified date to title as (d-Mmm), e.g. (15-May)
-        var dateSuffix = hasSpecificDueDate ? " (" + formatDateSuffix(aiDatePart) + ")" : "";
         return {
           id: "task-" + Date.now() + "-" + (idCounter++),
-          title: titleStr + dateSuffix,
+          title: titleStr,
           body: bodyStr,
           dueDateTime: due,
           priority: pri,
@@ -3341,22 +3324,6 @@
         var mo = parseInt(parts[1], 10) - 1;
         buildCalendarGrid(popup, idx2, yr, mo);
         popup.classList.add("open");
-        // Move popup to body so fixed positioning is viewport-anchored
-        if (popup.parentElement !== document.body) {
-          document.body.appendChild(popup);
-        }
-        // Smart viewport-aware positioning
-        var POPUP_W = 320, POPUP_H = 300;
-        var r = btn.getBoundingClientRect();
-        var spaceBelow = window.innerHeight - r.bottom;
-        var top  = (spaceBelow >= POPUP_H || spaceBelow >= r.top)
-          ? r.bottom + 8
-          : r.top - POPUP_H - 8;
-        var left = r.left;
-        if (left + POPUP_W > window.innerWidth - 16)  { left = window.innerWidth - POPUP_W - 16; }
-        if (left < 16)                                { left = 16; }
-        popup.style.top  = top  + "px";
-        popup.style.left = left + "px";
       });
     });
 
@@ -3436,11 +3403,10 @@
     var todayStr = getTodayDate();
     var selectedStr = state.tasks[taskIdx] ? (state.tasks[taskIdx].dueDateTime || "").substring(0, 10) : "";
 
-    var html = '<div class="cal-header" style="display:flex;align-items:center;justify-content:space-between;">' +
-      '<button type="button" class="cal-prev" data-idx="' + taskIdx + '" style="background:none;border:none;cursor:pointer;font-size:16px;color:var(--text-secondary);padding:4px 8px;">&lsaquo;</button>' +
+    var html = '<div class="cal-header">' +
+      '<button type="button" class="cal-prev" data-idx="' + taskIdx + '">&lsaquo;</button>' +
       '<span class="cal-month-year">' + MONTH_NAMES[month] + ' ' + year + '</span>' +
-      '<button type="button" class="cal-close" data-idx="' + taskIdx + '" style="background:none;border:none;cursor:pointer;font-size:18px;color:var(--text-secondary);padding:2px 6px;">&times;</button>' +
-      '<button type="button" class="cal-next" data-idx="' + taskIdx + '" style="background:none;border:none;cursor:pointer;font-size:16px;color:var(--text-secondary);padding:4px 8px;">&rsaquo;</button>' +
+      '<button type="button" class="cal-next" data-idx="' + taskIdx + '">&rsaquo;</button>' +
     '</div>' +
     '<div class="cal-grid">';
 
@@ -3519,12 +3485,6 @@
       e.stopPropagation();
       var idx2 = parseInt(this.getAttribute("data-idx"), 10);
       selectCalendarDate(idx2, "");
-      popup.classList.remove("open");
-    });
-
-    // Bind close button
-    popup.querySelector(".cal-close").addEventListener("click", function(e) {
-      e.stopPropagation();
       popup.classList.remove("open");
     });
   }
