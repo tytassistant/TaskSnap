@@ -480,10 +480,6 @@
     display: none;
   }
   .cal-popup.open { display: block; }
-  .cal-popup-backdrop {
-    position: fixed; inset: 0; z-index: 9997;
-    background: rgba(0,0,0,0.35);
-  }
   .cal-header {
     display: flex; align-items: center; justify-content: space-between;
     margin-bottom: 8px;
@@ -3346,9 +3342,6 @@
         var mo = parseInt(parts[1], 10) - 1;
         buildCalendarGrid(popup, idx2, yr, mo);
         popup.classList.add("open");
-        var backdrop = document.createElement("div");
-        backdrop.className = "cal-popup-backdrop";
-        document.body.appendChild(backdrop);
       });
     });
 
@@ -3428,10 +3421,11 @@
     var todayStr = getTodayDate();
     var selectedStr = state.tasks[taskIdx] ? (state.tasks[taskIdx].dueDateTime || "").substring(0, 10) : "";
 
-    var html = '<div class="cal-header">' +
-      '<button type="button" class="cal-prev" data-idx="' + taskIdx + '">&lsaquo;</button>' +
+    var html = '<div class="cal-header" style="display:flex;align-items:center;justify-content:space-between;">' +
+      '<button type="button" class="cal-prev" data-idx="' + taskIdx + '" style="background:none;border:none;cursor:pointer;font-size:16px;color:var(--text-secondary);padding:4px 8px;">&lsaquo;</button>' +
       '<span class="cal-month-year">' + MONTH_NAMES[month] + ' ' + year + '</span>' +
-      '<button type="button" class="cal-next" data-idx="' + taskIdx + '">&rsaquo;</button>' +
+      '<button type="button" class="cal-close" data-idx="' + taskIdx + '" style="background:none;border:none;cursor:pointer;font-size:18px;color:var(--text-secondary);padding:2px 6px;">&times;</button>' +
+      '<button type="button" class="cal-next" data-idx="' + taskIdx + '" style="background:none;border:none;cursor:pointer;font-size:16px;color:var(--text-secondary);padding:4px 8px;">&rsaquo;</button>' +
     '</div>' +
     '<div class="cal-grid">';
 
@@ -3512,6 +3506,12 @@
       selectCalendarDate(idx2, "");
       popup.classList.remove("open");
     });
+
+    // Bind close button
+    popup.querySelector(".cal-close").addEventListener("click", function(e) {
+      e.stopPropagation();
+      popup.classList.remove("open");
+    });
   }
 
   function selectCalendarDate(taskIdx, dateStr) {
@@ -3543,9 +3543,6 @@
     if (!e.target.closest(".cal-popup") && !e.target.closest(".cal-trigger")) {
       document.querySelectorAll(".cal-popup.open").forEach(function(p) {
         p.classList.remove("open");
-      });
-      document.querySelectorAll(".cal-popup-backdrop").forEach(function(b) {
-        b.remove();
       });
     }
   });
