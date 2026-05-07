@@ -3341,30 +3341,22 @@
         var mo = parseInt(parts[1], 10) - 1;
         buildCalendarGrid(popup, idx2, yr, mo);
         popup.classList.add("open");
-        // Move popup to body so fixed positioning is truly viewport-anchored
+        // Move popup to body so fixed positioning is viewport-anchored
         if (popup.parentElement !== document.body) {
           document.body.appendChild(popup);
         }
-        // Smart positioning: open above or below trigger depending on viewport space
-        var rect = btn.getBoundingClientRect();
-        var popupEl = popup;
-        var popupWidth = 320;
-        var popupHeight = 300;
-        var spaceBelow = window.innerHeight - rect.bottom;
-        var top;
-        if (spaceBelow >= popupHeight || spaceBelow >= rect.top) {
-          top = rect.bottom + 8;
-        } else {
-          top = rect.top - popupHeight - 8;
-        }
-        var left = rect.left;
-        // Clamp right edge
-        if (left + popupWidth > window.innerWidth - 16) {
-          left = window.innerWidth - popupWidth - 16;
-        }
-        if (left < 16) { left = 16; }
-        popupEl.style.top = top + "px";
-        popupEl.style.left = left + "px";
+        // Smart viewport-aware positioning
+        var POPUP_W = 320, POPUP_H = 300;
+        var r = btn.getBoundingClientRect();
+        var spaceBelow = window.innerHeight - r.bottom;
+        var top  = (spaceBelow >= POPUP_H || spaceBelow >= r.top)
+          ? r.bottom + 8
+          : r.top - POPUP_H - 8;
+        var left = r.left;
+        if (left + POPUP_W > window.innerWidth - 16)  { left = window.innerWidth - POPUP_W - 16; }
+        if (left < 16)                                { left = 16; }
+        popup.style.top  = top  + "px";
+        popup.style.left = left + "px";
       });
     });
 
@@ -4222,4 +4214,37 @@
     state.tasks = [];
     state.uploadedFile = null;
     state.photoDataUrl = null;
-    previ
+    previewImg.src = "";
+    uploadPreview.style.display = "none";
+    uploadZone.style.display = "";
+    cameraRow.style.display = "";
+    imageInput.value = "";
+    cameraInput.value = "";
+    // Reset smart input
+    smartTextInput.value = "";
+    smartPasteDataUrl = null;
+    smartPasteImg.src = "";
+    smartPastePreview.style.display = "none";
+    lastUserInstruction = "";
+    lastInputHadText = false;
+    extractBtn.disabled = true;
+    taskList.innerHTML = "";
+    newListInputPriority.value = "";
+    newListInputOther.value = "";
+    newListInputEvent.value = "";
+    $id("modalCustomSections").innerHTML = "";
+    $id("modalUnmatchedSections").innerHTML = "";
+    modalCustomData = [];
+    modalUnmatchedData = [];
+    cachedListNames = [];
+    updateStepper(2);
+    showSection("upload");
+  });
+
+  // ========== BOOT: TRY AUTO-LOGIN ==========
+  tryAutoLogin();
+
+})();
+</script>
+</body>
+</html>
