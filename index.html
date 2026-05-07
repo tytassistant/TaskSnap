@@ -472,9 +472,8 @@
   .cal-trigger:hover { background: var(--accent-glow); }
   .cal-trigger .placeholder { color: var(--text-tertiary); }
   .cal-popup {
-    position: fixed; top: 50%; left: 50%;
-    margin-top: calc(50vh - 50%);
-    z-index: 9998; background: var(--bg-card); border: 1px solid var(--border-strong);
+    position: fixed; z-index: 9998;
+    background: var(--bg-card); border: 1px solid var(--border-strong);
     border-radius: var(--radius-md); box-shadow: var(--shadow-lg);
     padding: 12px; max-width: 320px; width: calc(100% - 32px);
     display: none;
@@ -3342,6 +3341,30 @@
         var mo = parseInt(parts[1], 10) - 1;
         buildCalendarGrid(popup, idx2, yr, mo);
         popup.classList.add("open");
+        // Move popup to body so fixed positioning is truly viewport-anchored
+        if (popup.parentElement !== document.body) {
+          document.body.appendChild(popup);
+        }
+        // Smart positioning: open above or below trigger depending on viewport space
+        var rect = btn.getBoundingClientRect();
+        var popupEl = popup;
+        var popupWidth = 320;
+        var popupHeight = 300;
+        var spaceBelow = window.innerHeight - rect.bottom;
+        var top;
+        if (spaceBelow >= popupHeight || spaceBelow >= rect.top) {
+          top = rect.bottom + 8;
+        } else {
+          top = rect.top - popupHeight - 8;
+        }
+        var left = rect.left;
+        // Clamp right edge
+        if (left + popupWidth > window.innerWidth - 16) {
+          left = window.innerWidth - popupWidth - 16;
+        }
+        if (left < 16) { left = 16; }
+        popupEl.style.top = top + "px";
+        popupEl.style.left = left + "px";
       });
     });
 
@@ -4199,37 +4222,4 @@
     state.tasks = [];
     state.uploadedFile = null;
     state.photoDataUrl = null;
-    previewImg.src = "";
-    uploadPreview.style.display = "none";
-    uploadZone.style.display = "";
-    cameraRow.style.display = "";
-    imageInput.value = "";
-    cameraInput.value = "";
-    // Reset smart input
-    smartTextInput.value = "";
-    smartPasteDataUrl = null;
-    smartPasteImg.src = "";
-    smartPastePreview.style.display = "none";
-    lastUserInstruction = "";
-    lastInputHadText = false;
-    extractBtn.disabled = true;
-    taskList.innerHTML = "";
-    newListInputPriority.value = "";
-    newListInputOther.value = "";
-    newListInputEvent.value = "";
-    $id("modalCustomSections").innerHTML = "";
-    $id("modalUnmatchedSections").innerHTML = "";
-    modalCustomData = [];
-    modalUnmatchedData = [];
-    cachedListNames = [];
-    updateStepper(2);
-    showSection("upload");
-  });
-
-  // ========== BOOT: TRY AUTO-LOGIN ==========
-  tryAutoLogin();
-
-})();
-</script>
-</body>
-</html>
+    previ
