@@ -473,14 +473,14 @@
   .cal-trigger .placeholder { color: var(--text-tertiary); }
   .cal-popup {
     position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-    z-index: 200; background: var(--bg-card); border: 1px solid var(--border-strong);
+    z-index: 9998; background: var(--bg-card); border: 1px solid var(--border-strong);
     border-radius: var(--radius-md); box-shadow: var(--shadow-lg);
     padding: 12px; max-width: 320px; width: calc(100% - 32px);
     display: none;
   }
   .cal-popup.open { display: block; }
   .cal-popup-backdrop {
-    position: fixed; inset: 0; z-index: 199;
+    position: fixed; inset: 0; z-index: 9997;
     background: rgba(0,0,0,0.35); backdrop-filter: blur(2px);
   }
   .cal-header {
@@ -2795,6 +2795,15 @@
     var idCounter = 0;
     var uploadDate = getTodayDate();
 
+    // --- Helper: format date string as d-Mmm for title suffixes ---
+    function formatDateSuffix(dateStr) {
+      if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) { return ""; }
+      var parts = dateStr.split("-");
+      var d = parseInt(parts[2], 10);
+      var m = parseInt(parts[1], 10) - 1;
+      return d + "-" + MONTH_NAMES[m].substring(0, 3);
+    }
+
     // --- Helper: build event task objects from an event data object ---
     function buildEventTask(ev) {
       var eventName = (ev.eventName || "Unknown Event").trim();
@@ -2821,9 +2830,10 @@
       if (lastUserInstruction) {
         bodyParts.push((bodyParts.length > 0 ? "\n" : "") + "User note: " + lastUserInstruction);
       }
+      var deadlineSuffix = deadline ? " (" + formatDateSuffix(deadline) + ")" : "";
       return {
         id: "task-" + Date.now() + "-" + (idCounter++),
-        title: "Register for " + eventName,
+        title: "Register for " + eventName + deadlineSuffix,
         body: bodyParts.join("\n"),
         dueDateTime: dueDateTimeStr,
         priority: false,
@@ -2854,6 +2864,11 @@
             hasSpecificDueDate = (aiDatePortion !== defaultDatePortion);
           }
         }
+        // When AI identifies a specific date: set due to 1 day prior at 21:00, and append date to title
+        if (hasSpecificDueDate) {
+          var aiDatePart = aiExplicitDue.split("T")[0];
+          due = getPreviousDay(aiDatePart) + "T21:00:00";
+        }
         var titleStr = t.title || "Untitled task";
         var bodyStr = t.body || "";
         // Check priority BEFORE appending user instruction (to avoid false positives
@@ -2863,9 +2878,11 @@
         if (lastUserInstruction) {
           bodyStr = (bodyStr ? bodyStr + "\n\n" : "") + "User note: " + lastUserInstruction;
         }
+        // Append identified date to title as (d-Mmm), e.g. (15-May)
+        var dateSuffix = hasSpecificDueDate ? " (" + formatDateSuffix(aiDatePart) + ")" : "";
         return {
           id: "task-" + Date.now() + "-" + (idCounter++),
-          title: titleStr,
+          title: titleStr + dateSuffix,
           body: bodyStr,
           dueDateTime: due,
           priority: pri,
