@@ -472,13 +472,17 @@
   .cal-trigger:hover { background: var(--accent-glow); }
   .cal-trigger .placeholder { color: var(--text-tertiary); }
   .cal-popup {
-    position: absolute; z-index: 100;
-    background: var(--bg-card); border: 1px solid var(--border-strong);
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    z-index: 200; background: var(--bg-card); border: 1px solid var(--border-strong);
     border-radius: var(--radius-md); box-shadow: var(--shadow-lg);
-    padding: 12px; width: 280px;
+    padding: 12px; max-width: 320px; width: calc(100% - 32px);
     display: none;
   }
   .cal-popup.open { display: block; }
+  .cal-popup-backdrop {
+    position: fixed; inset: 0; z-index: 199;
+    background: rgba(0,0,0,0.35); backdrop-filter: blur(2px);
+  }
   .cal-header {
     display: flex; align-items: center; justify-content: space-between;
     margin-bottom: 8px;
@@ -1054,7 +1058,7 @@
       </button>
 
       <label id="liteModeLabel" style="display:flex; align-items:center; gap:10px; margin-top:14px; cursor:pointer; padding:10px 12px; background:var(--accent-light); border-radius:var(--radius-sm); font-size:14px; font-weight:600; color:var(--accent);">
-        <input type="checkbox" id="liteModeCheck" checked style="width:18px; height:18px; accent-color:var(--accent); cursor:pointer;">
+        <input type="checkbox" id="liteModeCheck" style="width:18px; height:18px; accent-color:var(--accent); cursor:pointer;">
         <span><i class="fas fa-bolt" style="margin-right:4px;"></i> Lite mode — bypass review</span>
       </label>
     </div>
@@ -3324,6 +3328,9 @@
         var mo = parseInt(parts[1], 10) - 1;
         buildCalendarGrid(popup, idx2, yr, mo);
         popup.classList.add("open");
+        var backdrop = document.createElement("div");
+        backdrop.className = "cal-popup-backdrop";
+        document.body.appendChild(backdrop);
       });
     });
 
@@ -3518,6 +3525,9 @@
     if (!e.target.closest(".cal-popup") && !e.target.closest(".cal-trigger")) {
       document.querySelectorAll(".cal-popup.open").forEach(function(p) {
         p.classList.remove("open");
+      });
+      document.querySelectorAll(".cal-popup-backdrop").forEach(function(b) {
+        b.remove();
       });
     }
   });
