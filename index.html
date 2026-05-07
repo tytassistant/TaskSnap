@@ -472,7 +472,8 @@
   .cal-trigger:hover { background: var(--accent-glow); }
   .cal-trigger .placeholder { color: var(--text-tertiary); }
   .cal-popup {
-    position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    position: fixed; top: 50%; left: 50%;
+    margin-top: calc(50vh - 50%);
     z-index: 9998; background: var(--bg-card); border: 1px solid var(--border-strong);
     border-radius: var(--radius-md); box-shadow: var(--shadow-lg);
     padding: 12px; max-width: 320px; width: calc(100% - 32px);
@@ -481,7 +482,7 @@
   .cal-popup.open { display: block; }
   .cal-popup-backdrop {
     position: fixed; inset: 0; z-index: 9997;
-    background: rgba(0,0,0,0.35); backdrop-filter: blur(2px);
+    background: rgba(0,0,0,0.35);
   }
   .cal-header {
     display: flex; align-items: center; justify-content: space-between;
