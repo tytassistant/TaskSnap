@@ -1,2 +1,11 @@
 # Internal dev notes
 .dev/
+
+# FastAPI backend runtime data / secrets
+FastAPI/tasksnap.db
+FastAPI/.session-secret
+FastAPI/.ms-token-key
+FastAPI/.tasksnap-api-key
+FastAPI/config/.env
+FastAPI/__pycache__/
+FastAPI/*.pyc

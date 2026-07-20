@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Sign in — TaskSnap{% endblock %}
+{% block body %}
+<div class="card">
+  <h1>TaskSnap</h1>
+  <form method="post" action="/login">
+    <label>Username
+      <input type="text" name="username" required autofocus>
+    </label>
+    <label>Password
+      <input type="password" name="password" required>
+    </label>
+    <button type="submit">Sign in</button>
+  </form>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+</div>
+{% endblock %}

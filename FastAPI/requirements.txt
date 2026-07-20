@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+requests
+cryptography
+itsdangerous
+jinja2
+python-multipart
+mcp
+python-dotenv

@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TaskSnap — Photo to Microsoft To Do</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;500;600;700;800&family=Source+Serif+4:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="bg-pattern"></div>
+
+<div class="app-container">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-logo">
+      <div class="header-logo-icon"><i class="fas fa-camera-retro"></i></div>
+      <h1>TaskSnap</h1>
+    </div>
+    <p>Photograph or type your to-do list, sync it to Microsoft To&nbsp;Do</p>
+    <p style="margin-top:10px;"><a href="/logout" style="font-size:12px; color:var(--text-tertiary);">Log out</a></p>
+  </div>
+
+  <!-- Stepper: 3 steps (Input / Review / Sync) -- login and MS OAuth both
+       happen server-side now, so the old 4th "Connect" step is gone. -->
+  <div class="stepper" id="stepper">
+    <div class="step-item active" data-step="1">
+      <span class="step-num">1</span><span>Input</span>
+    </div>
+    <div class="step-connector"></div>
+    <div class="step-item" data-step="2">
+      <span class="step-num">2</span><span>Review</span>
+    </div>
+    <div class="step-connector"></div>
+    <div class="step-item" data-step="3">
+      <span class="step-num">3</span><span>Sync</span>
+    </div>
+  </div>
+
+  <!-- ======= SECTION 1: INPUT ======= -->
+  <div class="section visible" id="section-upload">
+    <div id="msLinkNotice" class="card" style="display:none; padding:16px 20px; border-color:var(--danger);">
+      <span style="font-size:14px; color:var(--danger);">
+        <i class="fas fa-triangle-exclamation"></i> Your Microsoft account isn't connected yet —
+        you can still extract and edit tasks, but syncing needs it.
+        <a href="/auth/login" style="color:var(--danger); text-decoration:underline;">Connect now</a>
+      </span>
+    </div>
+
+    <div class="card">
+      <div style="font-size:13px; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.05em; margin-bottom:6px;">
+        Upload an image of a handwritten or printed to-do list
+      </div>
+
+      <div class="upload-zone" id="uploadZone">
+        <input type="file" id="imageInput" accept="image/*">
+        <div class="upload-icon"><i class="fas fa-cloud-arrow-up"></i></div>
+        <h3>Tap to upload or drag &amp; drop</h3>
+        <p>PNG, JPG, WebP — max 20 MB</p>
+      </div>
+      <div class="camera-btn-row" id="cameraRow">
+        <input type="file" id="cameraInput" accept="image/*" capture="environment" style="display:none;">
+        <button type="button" class="camera-btn" id="cameraBtn"><i class="fas fa-camera"></i> Take photo</button>
+      </div>
+
+      <div class="upload-preview" id="uploadPreview">
+        <img id="previewImg" alt="Uploaded preview">
+        <button class="remove-img" id="removeImgBtn" type="button"><i class="fas fa-xmark"></i></button>
+      </div>
+
+      <div class="smart-input-wrap" style="margin-top:16px;">
+        <label style="font-size:13px; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.05em; display:block; margin-bottom:6px;">
+          Smart Input <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional)</span>
+        </label>
+        <div class="smart-input-box" id="smartInputBox">
+          <textarea id="smartTextInput" placeholder="Type a task or instruction, and / or paste an image" rows="2"></textarea>
+          <div id="smartPastePreview" style="display:none;">
+            <img id="smartPasteImg" alt="Pasted image">
+            <button type="button" id="smartPasteRemove" title="Remove pasted image"><i class="fas fa-xmark"></i></button>
+          </div>
+        </div>
+      </div>
+
+      <div class="tz-row" style="margin-top:18px;">
+        <div class="field">
+          <label>Timezone for due dates</label>
+          <select id="timezoneSelect"></select>
+        </div>
+      </div>
+
+      <button class="btn btn-accent btn-block" id="extractBtn" type="button" disabled>
+        <i class="fas fa-wand-magic-sparkles"></i> Extract tasks with AI
+      </button>
+
+      <label id="liteModeLabel" style="display:flex; align-items:center; gap:10px; margin-top:14px; cursor:pointer; padding:10px 12px; background:var(--accent-light); border-radius:var(--radius-sm); font-size:14px; font-weight:600; color:var(--accent);">
+        <input type="checkbox" id="liteModeCheck" style="width:18px; height:18px; accent-color:var(--accent); cursor:pointer;">
+        <span><i class="fas fa-bolt" style="margin-right:4px;"></i> Lite mode — bypass review</span>
+      </label>
+    </div>
+  </div>
+
+  <!-- ======= SECTION 2: REVIEW ======= -->
+  <div class="section" id="section-review">
+    <div class="card">
+      <div class="card-title">Review extracted tasks</div>
+      <div class="card-desc">
+        Edit titles, notes, and due dates before syncing. Remove any tasks you don't need.
+      </div>
+
+      <div id="photoThumbRow" class="photo-thumb-row" style="display:none;">
+        <img id="photoThumbImg" alt="Source photo">
+        <div class="thumb-label">
+          <strong>Source photo</strong>
+          <span>Tap to zoom &amp; pan</span>
+        </div>
+      </div>
+
+      <div id="extractionLoading" style="display:none;">
+        <div class="spinner"></div>
+        <div class="loading-text animate-pulse">Analyzing your to-do list…</div>
+      </div>
+
+      <div id="photoDateRow" style="display:none; margin-bottom:16px;">
+        <div class="field" style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+          <label style="margin:0; white-space:nowrap;"><i class="fas fa-camera-retro" style="margin-right:4px;"></i> Photo Date</label>
+          <span id="photoDateValue" class="photo-date-input" style="display:inline-flex; align-items:center;"></span>
+          <span id="photoDateInfo" class="photo-date-info"></span>
+        </div>
+      </div>
+
+      <div class="task-list" id="taskList"></div>
+
+      <button class="add-task-btn" id="addTaskBtn" type="button" style="margin-top:12px; display:none;">
+        <i class="fas fa-plus"></i> Add task manually
+      </button>
+
+      <div class="action-bar" id="reviewActions" style="display:none;">
+        <button class="btn btn-outline" id="backToUploadBtn" type="button">
+          <i class="fas fa-arrow-left"></i> Back
+        </button>
+        <button class="btn btn-primary" id="syncBtn" type="button" style="flex:1;">
+          <i class="fas fa-cloud-arrow-up"></i> Sync to Microsoft To Do
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======= SECTION 3: SYNC ======= -->
+  <div class="section" id="section-sync">
+    <div class="card" id="syncingCard">
+      <div class="card-title">Syncing tasks…</div>
+      <div class="card-desc" id="syncStatusText">Sending tasks to Microsoft To Do…</div>
+      <div class="sync-progress">
+        <div class="sync-progress-bar indeterminate" id="syncProgressBar"></div>
+      </div>
+    </div>
+
+    <div class="card" id="syncDoneCard" style="display:none;">
+      <div class="sync-summary">
+        <div class="big-icon" id="syncDoneIcon"><i class="fas fa-circle-check"></i></div>
+        <h2 id="syncDoneTitle">All synced!</h2>
+        <p id="syncDoneText">Your tasks are now in Microsoft To Do.</p>
+      </div>
+      <div id="syncErrorDetail" style="display:none;"></div>
+      <div class="action-bar" style="justify-content:center; flex-wrap:wrap;">
+        <button class="btn btn-outline btn-sm" id="reAuthBtn" type="button" style="display:none;">
+          <i class="fas fa-rotate-right"></i> Connect Microsoft account
+        </button>
+        <button class="btn btn-outline btn-sm" id="retryFailedBtn" type="button" style="display:none;">
+          <i class="fas fa-arrow-rotate-left"></i> Retry failed tasks
+        </button>
+        <button class="btn btn-accent" id="newScanBtn" type="button">
+          <i class="fas fa-camera-retro"></i> Input more tasks
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======= LIST SELECTOR MODAL ======= -->
+  <div class="modal-overlay" id="listModal">
+    <div class="modal-box">
+      <h3>Choose task lists</h3>
+      <p>Select which Microsoft To Do list each group should sync to.</p>
+
+      <div id="modalPrioritySection" style="display:none;">
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+          <i class="fas fa-fire" style="color:var(--danger); font-size:13px;"></i>
+          <span style="font-size:13px; font-weight:700; color:var(--danger); text-transform:uppercase; letter-spacing:0.04em;" id="modalPriorityLabel">Priority (0)</span>
+        </div>
+        <div class="field" style="margin-bottom:8px;">
+          <select id="listSelectPriority">
+            <option value="">Loading lists…</option>
+          </select>
+        </div>
+        <div class="field" style="margin-bottom:16px;">
+          <input type="text" id="newListInputPriority" placeholder="Or create new list (optional)">
+        </div>
+      </div>
+
+      <div id="modalOtherSection" style="display:none;">
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+          <i class="fas fa-list-check" style="color:var(--text-tertiary); font-size:13px;"></i>
+          <span style="font-size:13px; font-weight:700; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.04em;" id="modalOtherLabel">Other Tasks (0)</span>
+        </div>
+        <div class="field" style="margin-bottom:8px;">
+          <select id="listSelectOther">
+            <option value="">Loading lists…</option>
+          </select>
+        </div>
+        <div class="field" style="margin-bottom:16px;">
+          <input type="text" id="newListInputOther" placeholder="Or create new list (optional)">
+        </div>
+      </div>
+
+      <div id="modalEventSection" style="display:none;">
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+          <i class="fas fa-ticket" style="color:var(--danger); font-size:13px;"></i>
+          <span style="font-size:13px; font-weight:700; color:var(--danger); text-transform:uppercase; letter-spacing:0.04em;" id="modalEventLabel">Event Registration (0)</span>
+        </div>
+        <div class="field" style="margin-bottom:8px;">
+          <select id="listSelectEvent">
+            <option value="">Loading lists…</option>
+          </select>
+        </div>
+        <div class="field" style="margin-bottom:16px;">
+          <input type="text" id="newListInputEvent" placeholder="Or create new list (optional)">
+        </div>
+      </div>
+
+      <div id="modalCustomSections"></div>
+      <div id="modalUnmatchedSections"></div>
+      <div id="modalUncheckedNote"></div>
+
+      <div class="modal-actions">
+        <button class="btn btn-outline btn-sm" id="listModalCancel" type="button">Cancel</button>
+        <button class="btn btn-primary btn-sm" id="listModalConfirm" type="button">
+          <i class="fas fa-check"></i> Confirm
+        </button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="toast-container" id="toastContainer"></div>
+
+<!-- Lightbox overlay -->
+<div class="lightbox-overlay" id="lightboxOverlay">
+  <button class="lightbox-close" id="lightboxClose" type="button"><i class="fas fa-xmark"></i></button>
+  <div class="lightbox-img-wrap" id="lightboxWrap">
+    <img id="lightboxImg" alt="Full photo">
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
