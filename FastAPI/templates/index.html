@@ -21,11 +21,13 @@
       <h1>TaskSnap</h1>
     </div>
     <p>Photograph or type your to-do list, sync it to Microsoft To&nbsp;Do</p>
-    <p style="margin-top:10px; font-size:12px; color:var(--text-tertiary);">
-      <a href="/settings" style="color:var(--text-tertiary);">Settings</a> &middot;
-      <a href="/logout" style="color:var(--text-tertiary);">Log out</a>
-    </p>
   </div>
+
+  <!-- Nav -->
+  <nav class="nav-bar">
+    <a href="/" class="active"><i class="fas fa-camera-retro"></i> Wizard</a>
+    <a href="/settings"><i class="fas fa-gear"></i> Settings</a>
+  </nav>
 
   <!-- Stepper: 3 steps (Input / Review / Sync) -- login and MS OAuth both
        happen server-side now, so the old 4th "Connect" step is gone. -->

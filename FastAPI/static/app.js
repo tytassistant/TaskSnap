@@ -108,14 +108,14 @@ var lightboxClose = $id("lightboxClose");
 var lightboxWrap = $id("lightboxWrap");
 var lightboxImg = $id("lightboxImg");
 
-// ========== DARK MODE ==========
-if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) {
-  document.documentElement.classList.add("dark");
-}
-window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", function(e) {
-  if (e.matches) { document.documentElement.classList.add("dark"); }
-  else { document.documentElement.classList.remove("dark"); }
-});
+// ========== DARK MODE (disabled for now -- commented out, not deleted) ==========
+// if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) {
+//   document.documentElement.classList.add("dark");
+// }
+// window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", function(e) {
+//   if (e.matches) { document.documentElement.classList.add("dark"); }
+//   else { document.documentElement.classList.remove("dark"); }
+// });
 
 // ========== TOAST ==========
 function showToast(msg, type) {
