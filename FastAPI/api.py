@@ -45,13 +45,16 @@ def get_db():
 
 @router.get("/config", tags=["Config"])
 def get_config(conn: sqlite3.Connection = Depends(get_db)):
-    """Minimal app config for MCP's get_config tool -- whether an MS
-    account is linked (not the token itself) and the settings-backed
+    """Minimal app config for MCP's get_config tool and the Settings
+    page's connection-status display -- whether an MS account is linked
+    and its display name (never the token itself), and the settings-backed
     default timezone, so an agent can sanity-check setup before calling
     extract_tasks."""
     settings = crud.get_settings(conn)
+    ms_token = crud.get_ms_token(conn)
     return {
-        "ms_linked": crud.get_ms_token(conn) is not None,
+        "ms_linked": ms_token is not None,
+        "ms_account_name": ms_token["ms_token_account_name"] if ms_token else None,
         "default_timezone": settings["default_timezone"],
         "self_url": SELF_BASE,
     }
