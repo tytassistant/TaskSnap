@@ -171,33 +171,19 @@ def clear_ms_token(conn: sqlite3.Connection) -> None:
 # ===========================================================================
 
 # Seed values carried over from the current hardcoded JS (see plan §1/§7).
-# default_list_name_priority/other/event are left unset (None) -- the
-# current app has no equivalent hardcoded default for the *review-screen*
-# list-routing modal, only for lite mode.
-_DEFAULT_PRIORITY_KEYWORDS = [
-    "quiz", "exam", "test", "assessment",
-    "測", "小測", "測驗", "考", "考試", "口試",
-    "dict", "dictation", "默", "默書",
-]
 _DEFAULT_LIST_OVERRIDE_RULES = [
     "parenthetical list name, e.g. (List Name)",
     "explicit phrasing: put X in Y list",
     "shorthand: >> Y",
     "blanket phrasing: all/every ... list",
 ]
-_DEFAULT_LITE_MODE_LIST_NAMES = {
-    "priority": "Theo Quiz and Dictation",
-    "other": "Theo Homework",
-    "event": "Household Tasks",
-}
 _DEFAULT_TIMEZONE = "Asia/Hong_Kong"
+_DEFAULT_CATEGORY = "Household"
 
 
 def _settings_row_to_dict(row: sqlite3.Row) -> dict:
     d = dict(row)
-    d["priority_keywords"] = json.loads(d["priority_keywords"])
     d["list_override_rules"] = json.loads(d["list_override_rules"])
-    d["lite_mode_list_names"] = json.loads(d["lite_mode_list_names"])
     return d
 
 
@@ -212,17 +198,15 @@ def get_settings(conn: sqlite3.Connection) -> dict:
         conn.execute(
             """
             INSERT INTO settings_table
-                (settings_id, priority_keywords, list_override_rules,
-                 default_list_name_priority, default_list_name_other, default_list_name_event,
-                 default_timezone, lite_mode_list_names, settings_last_modified_datetime_UTC)
-            VALUES (?, ?, ?, NULL, NULL, NULL, ?, ?, ?)
+                (settings_id, list_override_rules, default_timezone, default_category,
+                 settings_last_modified_datetime_UTC)
+            VALUES (?, ?, ?, ?, ?)
             """,
             (
                 database.SINGLETON_ID,
-                json.dumps(_DEFAULT_PRIORITY_KEYWORDS),
                 json.dumps(_DEFAULT_LIST_OVERRIDE_RULES),
                 _DEFAULT_TIMEZONE,
-                json.dumps(_DEFAULT_LITE_MODE_LIST_NAMES),
+                _DEFAULT_CATEGORY,
                 now,
             ),
         )
@@ -235,12 +219,8 @@ def get_settings(conn: sqlite3.Connection) -> dict:
 
 # Columns that store JSON-encoded values, needing json.dumps() before the
 # UPDATE rather than being written as plain TEXT.
-_SETTINGS_JSON_FIELDS = {"priority_keywords", "list_override_rules", "lite_mode_list_names"}
-_SETTINGS_FIELDS = {
-    "priority_keywords", "list_override_rules",
-    "default_list_name_priority", "default_list_name_other", "default_list_name_event",
-    "default_timezone", "lite_mode_list_names",
-}
+_SETTINGS_JSON_FIELDS = {"list_override_rules"}
+_SETTINGS_FIELDS = {"list_override_rules", "default_timezone", "default_category"}
 
 
 def update_settings(conn: sqlite3.Connection, **fields: Any) -> dict:
@@ -270,13 +250,138 @@ def update_settings(conn: sqlite3.Connection, **fields: Any) -> dict:
 
 
 # ===========================================================================
+# list_table (list_table refactor -- replaces the fixed priority/other/
+# event bucket model with category+keyword-tagged Microsoft To Do lists).
+# ===========================================================================
+
+
+def _list_entry_row_to_dict(row: sqlite3.Row) -> dict:
+    d = dict(row)
+    d["list_alt_names"] = json.loads(d["list_alt_names"])
+    d["list_category"] = json.loads(d["list_category"])
+    d["list_keywords"] = json.loads(d["list_keywords"])
+    d["list_is_category_default"] = bool(d["list_is_category_default"])
+    return d
+
+
+def _clear_category_default(conn: sqlite3.Connection, categories: list, exclude_list_id: Optional[str] = None) -> None:
+    """Keeps 'the default list for category X' unambiguous: unsets
+    list_is_category_default on every OTHER row sharing any of the given
+    categories. Called before setting the flag on a row, not after --
+    SQLite can't express this as a cross-row UNIQUE constraint here."""
+    if not categories:
+        return
+    rows = conn.execute(
+        "SELECT list_id, list_category FROM list_table WHERE list_is_category_default = 1"
+    ).fetchall()
+    for row in rows:
+        if row["list_id"] == exclude_list_id:
+            continue
+        if set(json.loads(row["list_category"])) & set(categories):
+            conn.execute(
+                "UPDATE list_table SET list_is_category_default = 0 WHERE list_id = ?",
+                (row["list_id"],),
+            )
+
+
+def add_list_entry(
+    conn: sqlite3.Connection,
+    list_name: str,
+    list_ms_id: Optional[str] = None,
+    list_alt_names: Optional[list] = None,
+    list_category: Optional[list] = None,
+    list_keywords: Optional[list] = None,
+    list_is_category_default: bool = False,
+) -> dict:
+    list_id = helpers.generate_id(conn, "list_table", "list_id", "list_")
+    next_index = conn.execute(
+        "SELECT COALESCE(MAX(list_order_index), -1) + 1 FROM list_table"
+    ).fetchone()[0]
+    now = helpers.utc_now_iso()
+    categories = list_category or []
+    if list_is_category_default:
+        _clear_category_default(conn, categories)
+    conn.execute(
+        """
+        INSERT INTO list_table
+            (list_id, list_ms_id, list_name, list_alt_names, list_category, list_keywords,
+             list_is_category_default, list_order_index, list_create_datetime_UTC,
+             list_last_modified_datetime_UTC)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            list_id, list_ms_id, list_name, json.dumps(list_alt_names or []),
+            json.dumps(categories), json.dumps(list_keywords or []),
+            int(list_is_category_default), next_index, now, now,
+        ),
+    )
+    conn.commit()
+    return get_list_entry(conn, list_id)
+
+
+def get_list_entry(conn: sqlite3.Connection, list_id: str) -> Optional[dict]:
+    row = conn.execute("SELECT * FROM list_table WHERE list_id = ?", (list_id,)).fetchone()
+    return _list_entry_row_to_dict(row) if row else None
+
+
+def list_all_list_entries(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute("SELECT * FROM list_table ORDER BY list_order_index").fetchall()
+    return [_list_entry_row_to_dict(r) for r in rows]
+
+
+_LIST_ENTRY_EDITABLE_FIELDS = {
+    "list_ms_id", "list_name", "list_alt_names", "list_category",
+    "list_keywords", "list_is_category_default",
+}
+_LIST_ENTRY_JSON_FIELDS = {"list_alt_names", "list_category", "list_keywords"}
+
+
+def update_list_entry(conn: sqlite3.Connection, list_id: str, **fields: Any) -> dict:
+    _require_exists(conn, "list_table", "list_id", list_id, "list_id")
+    unknown = set(fields) - _LIST_ENTRY_EDITABLE_FIELDS
+    if unknown:
+        raise helpers.ValidationError(f"Unknown list-entry field(s): {', '.join(sorted(unknown))}")
+    if fields:
+        if fields.get("list_is_category_default"):
+            categories = fields.get("list_category")
+            if categories is None:
+                categories = get_list_entry(conn, list_id)["list_category"]
+            _clear_category_default(conn, categories, exclude_list_id=list_id)
+        set_clauses = []
+        values = []
+        for key, value in fields.items():
+            set_clauses.append(f"{key} = ?")
+            if key in _LIST_ENTRY_JSON_FIELDS:
+                values.append(json.dumps(value))
+            elif key == "list_is_category_default":
+                values.append(int(value))
+            else:
+                values.append(value)
+        set_clauses.append("list_last_modified_datetime_UTC = ?")
+        values.append(helpers.utc_now_iso())
+        values.append(list_id)
+        conn.execute(
+            f"UPDATE list_table SET {', '.join(set_clauses)} WHERE list_id = ?",
+            values,
+        )
+        conn.commit()
+    return get_list_entry(conn, list_id)
+
+
+def delete_list_entry(conn: sqlite3.Connection, list_id: str) -> None:
+    _require_exists(conn, "list_table", "list_id", list_id, "list_id")
+    conn.execute("DELETE FROM list_table WHERE list_id = ?", (list_id,))
+    conn.commit()
+
+
+# ===========================================================================
 # draft_table / draft_task_table (decision 8)
 # ===========================================================================
 
 
 def _task_row_to_dict(row: sqlite3.Row) -> dict:
     return _row_to_dict(row, bool_fields=[
-        "task_priority", "task_checked", "task_has_specific_due_date", "task_synced",
+        "task_checked", "task_has_specific_due_date", "task_synced",
     ])
 
 
@@ -332,7 +437,6 @@ def add_draft_task(
     body: Optional[str] = None,
     due_datetime: Optional[str] = None,
     timezone: Optional[str] = None,
-    priority: bool = False,
     reminder_datetime: Optional[str] = None,
     list_name: Optional[str] = None,
     checked: bool = True,
@@ -345,8 +449,8 @@ def add_draft_task(
     has_specific_due_date is an AI-detection artifact (poe_client.py's
     shaping step -- plan §7's hasSpecificDueDate), not a user-editable
     field: it's set once at creation and used later by lite mode's
-    priority-or-date-specific auto-sync filter. Manual adds default it to
-    False, matching "no AI ever looked at this task"."""
+    date-specific auto-sync filter. Manual adds default it to False,
+    matching "no AI ever looked at this task"."""
     _require_exists(conn, "draft_table", "draft_id", draft_id, "draft_id")
     task_id = helpers.generate_id(conn, "draft_task_table", "task_id", "task_")
     next_index = conn.execute(
@@ -358,15 +462,15 @@ def add_draft_task(
         """
         INSERT INTO draft_task_table
             (task_id, draft_id, task_kind, task_title, task_body, task_due_datetime,
-             task_timezone, task_priority, task_reminder_datetime, task_list_name,
+             task_timezone, task_reminder_datetime, task_list_name,
              task_list_id, task_checked, task_has_specific_due_date, task_synced,
              task_synced_task_id, task_order_index, task_create_datetime_UTC,
              task_last_modified_datetime_UTC)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, 0, NULL, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, 0, NULL, ?, ?, ?)
         """,
         (
             task_id, draft_id, kind, title, body, due_datetime, timezone,
-            int(priority), reminder_datetime, list_name, int(checked),
+            reminder_datetime, list_name, int(checked),
             int(has_specific_due_date), next_index, now, now,
         ),
     )
@@ -381,10 +485,10 @@ def add_draft_task(
 # free-form edit.
 _DRAFT_TASK_EDITABLE_FIELDS = {
     "task_title", "task_body", "task_due_datetime", "task_timezone",
-    "task_priority", "task_reminder_datetime", "task_list_name", "task_list_id",
+    "task_reminder_datetime", "task_list_name", "task_list_id",
     "task_checked",
 }
-_DRAFT_TASK_BOOL_FIELDS = {"task_priority", "task_checked"}
+_DRAFT_TASK_BOOL_FIELDS = {"task_checked"}
 
 
 def update_draft_task(conn: sqlite3.Connection, draft_id: str, task_id: str, **fields: Any) -> dict:

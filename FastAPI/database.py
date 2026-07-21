@@ -53,14 +53,32 @@ TABLE_DDL = [
     """
     CREATE TABLE IF NOT EXISTS settings_table (
         settings_id TEXT PRIMARY KEY,
-        priority_keywords TEXT NOT NULL,
         list_override_rules TEXT NOT NULL,
-        default_list_name_priority TEXT,
-        default_list_name_other TEXT,
-        default_list_name_event TEXT,
         default_timezone TEXT NOT NULL,
-        lite_mode_list_names TEXT NOT NULL,
+        default_category TEXT NOT NULL DEFAULT 'Household',
         settings_last_modified_datetime_UTC TEXT NOT NULL
+    )
+    """,
+    # Replaces the old fixed priority/other/event bucket model (decision --
+    # see .dev plan doc's list_table refactor). Each row is one real
+    # Microsoft To Do list, tagged with category (who/what context, e.g. a
+    # person's name) and keywords (what kind of task, within that context).
+    # The AI extraction pass resolves both per task/event in one shot
+    # (categoryIdentified/listIdentified); list_is_category_default is the
+    # only piece Python itself still applies, as a deterministic fallback
+    # when the AI can't confidently pick a specific list.
+    """
+    CREATE TABLE IF NOT EXISTS list_table (
+        list_id TEXT PRIMARY KEY,
+        list_ms_id TEXT,
+        list_name TEXT NOT NULL,
+        list_alt_names TEXT NOT NULL DEFAULT '[]',
+        list_category TEXT NOT NULL DEFAULT '[]',
+        list_keywords TEXT NOT NULL DEFAULT '[]',
+        list_is_category_default INTEGER NOT NULL DEFAULT 0 CHECK (list_is_category_default IN (0, 1)),
+        list_order_index INTEGER NOT NULL,
+        list_create_datetime_UTC TEXT NOT NULL,
+        list_last_modified_datetime_UTC TEXT NOT NULL
     )
     """,
     """
@@ -84,7 +102,6 @@ TABLE_DDL = [
         task_body TEXT,
         task_due_datetime TEXT,
         task_timezone TEXT,
-        task_priority INTEGER NOT NULL DEFAULT 0 CHECK (task_priority IN (0, 1)),
         task_reminder_datetime TEXT,
         task_list_name TEXT,
         task_list_id TEXT,
@@ -121,6 +138,7 @@ ALL_TABLES = [
     "user_record_table",
     "ms_token_table",
     "settings_table",
+    "list_table",
     "draft_table",
     "draft_task_table",
     "pending_action_table",

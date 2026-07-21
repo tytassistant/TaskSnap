@@ -36,13 +36,37 @@ class SettingsUpdate(_StrictModel):
     """All optional -- PATCH /api/settings only changes fields that are
     actually present in the request body (model_dump(exclude_unset=True)),
     same partial-update convention as portfolio-management."""
-    priority_keywords: Optional[list[str]] = None
     list_override_rules: Optional[list[str]] = None
-    default_list_name_priority: Optional[str] = None
-    default_list_name_other: Optional[str] = None
-    default_list_name_event: Optional[str] = None
     default_timezone: Optional[str] = None
-    lite_mode_list_names: Optional[dict[str, str]] = None
+    default_category: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# list_table (list_table refactor)
+# ---------------------------------------------------------------------------
+
+
+class ListEntryCreate(_StrictModel):
+    """One row = one real Microsoft To Do list, tagged with category (who/
+    what context) and keywords (what kind of task) for the AI extraction
+    pass to route against. list_ms_id is left null until the list is
+    first resolved/created against the real MS account."""
+    list_name: str
+    list_ms_id: Optional[str] = None
+    list_alt_names: list[str] = []
+    list_category: list[str] = []
+    list_keywords: list[str] = []
+    list_is_category_default: bool = False
+
+
+class ListEntryUpdate(_StrictModel):
+    """All optional -- PATCH only changes fields present in the request."""
+    list_name: Optional[str] = None
+    list_ms_id: Optional[str] = None
+    list_alt_names: Optional[list[str]] = None
+    list_category: Optional[list[str]] = None
+    list_keywords: Optional[list[str]] = None
+    list_is_category_default: Optional[bool] = None
 
 
 # ---------------------------------------------------------------------------
@@ -52,41 +76,50 @@ class SettingsUpdate(_StrictModel):
 
 class DraftTaskCreate(_StrictModel):
     """Manual 'add a task to this draft' -- the GUI's existing add-task
-    button, and MCP's add_draft_task tool."""
+    button, and MCP's add_draft_task tool.
+
+    category is not a stored column -- when list_name is omitted but
+    category is given, api.py resolves it to that category's
+    list_is_category_default-flagged list via list_matcher.resolve_list
+    before ever calling crud.add_draft_task, the same mechanism the AI
+    extraction path uses. Giving neither leaves the task unassigned."""
     kind: TaskKind
     title: str
     body: Optional[str] = None
     due_datetime: Optional[str] = None
     timezone: Optional[str] = None
-    priority: bool = False
     reminder_datetime: Optional[str] = None
     list_name: Optional[str] = None
+    category: Optional[str] = None
     checked: bool = True
 
 
 class DraftTaskUpdate(_StrictModel):
     """All optional -- PATCH only changes fields present in the request.
     Deliberately excludes task_id/draft_id/synced/synced_task_id/
-    order_index: those are never set by a free-form edit (decision 8)."""
+    order_index: those are never set by a free-form edit (decision 8).
+    category behaves the same as on DraftTaskCreate (resolved, not
+    stored) -- only applied when list_name isn't also given."""
     title: Optional[str] = None
     body: Optional[str] = None
     due_datetime: Optional[str] = None
     timezone: Optional[str] = None
-    priority: Optional[bool] = None
     reminder_datetime: Optional[str] = None
     list_name: Optional[str] = None
     list_id: Optional[str] = None
+    category: Optional[str] = None
     checked: Optional[bool] = None
 
 
 # Maps this schema's public field names onto crud.py's task_-prefixed
-# column names -- the one place that translation is spelled out.
+# column names -- the one place that translation is spelled out. category
+# is deliberately absent -- it's resolved to list_name/list_id in api.py
+# before persistence, never stored itself.
 DRAFT_TASK_FIELD_MAP = {
     "title": "task_title",
     "body": "task_body",
     "due_datetime": "task_due_datetime",
     "timezone": "task_timezone",
-    "priority": "task_priority",
     "reminder_datetime": "task_reminder_datetime",
     "list_name": "task_list_name",
     "list_id": "task_list_id",

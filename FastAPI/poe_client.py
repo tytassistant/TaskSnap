@@ -1,21 +1,38 @@
-"""Extraction: prompt builder + Poe API call + server-side shaping
-(decision 8's third bullet). Ports buildAndSendPrompt/processExtractionResult/
-buildEventTask/buildRegularTasks/isPriorityTask/formatDateSuffix/
-getNextBusinessDay/getPreviousDay from the current tasksnap/index.html
-(plan §7) -- same classification rules, same JSON-contract shape, same
-due-date-default/title-suffix behavior.
+"""Extraction: prompt builder + Poe API call + server-side shaping.
 
-Settings-backed rules (decision 6): priority_keywords and
-list_override_rules come from crud.get_settings(), not hardcoded JS
-constants. Everything else in the prompt -- the CRITICAL/SCOPE ISOLATION
-instructional prose, the JSON-contract shape -- stays fixed template text
-here, same reasoning as decision 6's "structured settings, not raw prompt
-editing": letting a user edit that prose directly could silently break the
-JSON contract the rest of the pipeline (this module's own parser) depends
-on.
+list_table refactor: replaces the old fixed priority/other/event bucket
+model. The AI extraction pass now does essentially all of the list-routing
+work itself in one shot, because it has real context (the photo, the
+phrasing) that Python substring-matching can't reliably approximate. Per
+task/event, the AI returns:
+  - categoryIdentified: ALWAYS populated (the default category unless the
+    input explicitly indicates a different one -- see settings'
+    default_category).
+  - listIdentified: the exact list_name when confident (explicit naming,
+    or a clear keyword match within that category's lists); null when
+    genuinely unsure -- api.py's list_matcher.resolve_list() then applies
+    a small deterministic fallback (the category's default-flagged list,
+    or unmatched for manual assignment).
+
+The old `priority` field and its global priority_keywords setting are
+gone entirely -- superseded by each list's own `keywords`, which now
+drive real routing instead of a separate cosmetic flag. The old `type`
+field (todo_list/event/mixed/text_task) is also gone -- the response is
+always {photoDate, tasks: [], events: []}, both arrays simply empty when
+that kind isn't present.
+
+Settings-backed rules (decision 6): list_override_rules comes from
+crud.get_settings(), same as before. list_table itself (name/alt_names/
+category/keywords per list) is the other settings-backed input, from
+crud.list_all_list_entries(). Everything else in the prompt -- the
+CRITICAL/SCOPE ISOLATION instructional prose, the JSON-contract shape --
+stays fixed template text, same reasoning as before: letting a user edit
+that prose directly could silently break the JSON contract the rest of
+the pipeline (this module's own parser) depends on.
 
 Pure extraction logic -- no crud.py/database.py imports. api.py calls
-extract() and writes the returned shaped tasks into a draft itself.
+extract() with list_entries/default_category already fetched, and writes
+the returned shaped tasks into a draft itself.
 """
 
 import base64
@@ -96,131 +113,142 @@ def format_date_suffix(date_str: Optional[str]) -> str:
     return f"{d.day}-{MONTH_ABBREVIATIONS[d.month - 1]}"
 
 
-def is_priority_task(title: str, body: str, priority_keywords: list) -> bool:
-    combined = f"{title or ''} {body or ''}".lower()
-    return any(kw.lower() in combined for kw in priority_keywords)
-
-
 # ---------------------------------------------------------------------------
 # Prompt construction
 # ---------------------------------------------------------------------------
 
-def _list_override_block(list_names: list, extra_examples: list) -> list:
-    if not list_names:
-        return []
+def _available_lists_block(list_entries: list, default_category: str, extra_examples: list) -> list:
+    """The merged category+list block the AI uses to fill in
+    categoryIdentified/listIdentified. list_entries come straight from
+    crud.list_all_list_entries() -- list_name/list_alt_names/
+    list_category/list_keywords per row."""
+    if not list_entries:
+        return [
+            "",
+            "=== AVAILABLE LISTS ===",
+            "No lists are configured yet. Set categoryIdentified to "
+            f'"{default_category}" (the default category) on every item, '
+            "and leave listIdentified null on all of them.",
+            "",
+        ]
+    lists_json = json.dumps([
+        {
+            "list_name": row["list_name"],
+            "alt_names": row["list_alt_names"],
+            "categories": row["list_category"],
+            "keywords": row["list_keywords"],
+        }
+        for row in list_entries
+    ])
     lines = [
         "",
-        "=== LIST OVERRIDE ===",
-        f"The user has the following task lists available: {json.dumps(list_names)}",
+        "=== AVAILABLE LISTS ===",
+        "The user has the following task lists configured. Each list has a "
+        "canonical name, optional alternate names (other ways the user might "
+        "refer to it), belongs to one or more categories (a category groups "
+        "lists by shared context -- e.g. a person's name, or a type of task), "
+        "and optional keywords (what kind of task within that category "
+        "belongs on that specific list):",
         "",
-        "CRITICAL: Only set listOverride when the user EXPLICITLY names or references a specific "
-        "list using clear list-assignment language. Examples of EXPLICIT list instructions:",
-        "- 'english exam (quiz list)' → the parenthetical names a list",
-        "- 'put homework in household list' → 'put ... in ... list' pattern",
-        "- 'put all exams in quiz list' → explicit bulk assignment",
-        "- 'maths homework >> homework' → explicit delimiter syntax",
+        lists_json,
+        "",
+        f'The default category is: "{default_category}"',
+        "",
+        "For EACH task/event you extract, determine two fields:",
+        "",
+        "STEP A -- categoryIdentified (ALWAYS fill this in, never null):",
+        "- If the input explicitly indicates a different category (e.g. "
+        "names a person, or an explicit context) than the default, set "
+        "categoryIdentified to that EXACT category tag from the list above.",
+        f'- Otherwise, set categoryIdentified to the default category: "{default_category}".',
+        "",
+        "STEP B -- listIdentified (fill in ONLY when confident; null otherwise):",
+        "- If a specific list is explicitly named (by its exact name or an "
+        "alt_name) for this item, set listIdentified to that list's EXACT "
+        "list_name. This wins outright over any keyword-based guess.",
+        "- Otherwise, using ONLY the lists whose categories include this "
+        "item's categoryIdentified, compare the item's content against each "
+        "candidate list's keywords. If exactly one list clearly fits, set "
+        "listIdentified to that list's EXACT list_name.",
+        "- If you genuinely can't tell which specific list fits (no clear "
+        "keyword match, or it's ambiguous between two), set listIdentified "
+        "to null -- do NOT guess. The app has a safe default list for this "
+        "category.",
+        "- NEVER invent a list_name that isn't in the AVAILABLE LISTS above "
+        "-- if nothing matches, use null.",
+        "",
+        "SCOPE ISOLATION: category/list instructions apply only to the "
+        "item(s) they directly accompany, or to ALL items if the "
+        "instruction uses words like 'all'/'every'/'everything'. Never "
+        "propagate one item's explicit instruction onto other items with "
+        "no instruction of their own.",
+        "",
+        "Examples:",
+        '- "these are all for Theo" -> categoryIdentified = "Theo" on every '
+        "item this instruction applies to; listIdentified still determined "
+        "per-item via keywords within Theo's lists (or null if unclear).",
+        '- "put homework in household list" -> categoryIdentified = '
+        '"Household", listIdentified = "Household Tasks" (an explicit '
+        "'put X in Y list' pattern naming a specific list via its "
+        "alt_name).",
+        "- A quiz-sounding task with no explicit category/list mentioned "
+        "-> categoryIdentified falls to the default category; "
+        "listIdentified is set only if that category's lists have keywords "
+        "matching \"quiz\"-like content, otherwise null.",
     ]
     if extra_examples:
         lines.append("Additional examples the user has configured:")
         lines.extend(f"- {ex}" for ex in extra_examples)
-    lines.extend([
-        "",
-        "NEVER set listOverride based on your own inference of which list a task belongs to. If the "
-        "user just says 'maths assessment next Sunday' without mentioning any list, listOverride MUST "
-        "be null -- even if you think you know which list it should go to. The app handles default "
-        "list routing automatically based on task priority. Your job is ONLY to detect when the user "
-        "explicitly asks for a specific list.",
-        "",
-        "SCOPE ISOLATION: Each task's listOverride must ONLY come from list instructions that directly "
-        "accompany THAT specific task, OR from a global instruction that uses words like 'all', "
-        "'every', 'everything' to indicate it applies to all tasks. Never propagate one task's specific "
-        "list instruction to other tasks that have no list instruction of their own. For example, if "
-        "the user writes 'Maths assessment due next Sunday / Register for boating. Put in Summer "
-        "list', only the boating task gets listOverride -- the maths assessment has no list "
-        "instruction and its listOverride MUST be null.",
-        "",
-        "When the user DOES explicitly specify a list:",
-        "- Match the user's words to the closest list name from the available lists above.",
-        "- If the user says something like 'put all in X list' or 'put everything in X', apply the "
-        "override to ALL tasks/events.",
-        "- If the user specifies overrides for some tasks but not others, only set listOverride on the "
-        "specified tasks. Tasks without explicit list instructions should have listOverride set to "
-        "null.",
-        "- If you cannot confidently match the user's words to any available list, set listOverride to "
-        'the user\'s words as-is (e.g. "work list").',
-        "- The listOverride field should contain the EXACT list name from the available lists when a "
-        "match is found, or the user's raw words when no match is found.",
-        "",
-    ])
+    lines.append("")
     return lines
 
 
-def build_image_prompt(today: str, list_names: list, priority_keywords: list, list_override_rules: list) -> str:
-    keywords = ", ".join(priority_keywords)
+_ITEM_CONTRACT = (
+    '"categoryIdentified": "exact category tag", '
+    '"listIdentified": "exact list name" or null'
+)
+
+
+def build_image_prompt(today: str, list_entries: list, default_category: str, list_override_rules: list) -> str:
     lines = [
         f"Analyze this image carefully. Today's date is: {today}",
         "",
-        "=== STEP 1: CLASSIFY THE IMAGE ===",
-        "Determine if this image is:",
-        '- "todo_list": a handwritten or printed list of homework tasks, assignments, or things to do',
-        '- "event": an event flier, event poster, event summary email/webpage, registration notice, '
-        "competition announcement, workshop notice, or similar event information",
+        "=== STEP 1: FIND ITEMS ===",
+        "Look for two kinds of items in the image (and in the user's "
+        "instruction text, if any additional items are mentioned there "
+        "beyond the image): regular tasks (homework, assignments, or "
+        "things to do) and events (event fliers, event posters, event "
+        "summary emails/webpages, registration notices, competition "
+        "announcements, workshop notices, or similar). Extract ALL of both "
+        "kinds you find -- an image may contain either, both, or (combined "
+        "with instruction text) items of both kinds from two sources.",
         "",
-        "IMPORTANT: If the user instruction mentions ADDITIONAL tasks beyond what the image shows "
-        "(e.g. the image is an event flier but the user also mentions homework or exams), you MUST "
-        "return ALL items -- both from the image AND from the user instruction -- using the mixed "
-        "format described below.",
+        "=== STEP 2: FOR EACH REGULAR TASK ===",
         "",
-        "=== STEP 2: EXTRACT BASED ON TYPE ===",
+        "1. PHOTO DATE: Look at the top-left area of the image for a date "
+        "(the photo date / header date). Extract it as photoDate in "
+        "YYYY-MM-DD format. If no date is found, set photoDate to null.",
         "",
-        '--- If type is "todo_list" (and no events) ---',
+        "2. SUBJECT GROUPING: Tasks in the photo are often grouped by "
+        "subject using abbreviations like M (Maths), E (English), 中 "
+        "(Chinese), 音 (Music), 人 (Liberal Studies/人文), Sci (Science), "
+        "etc. When multiple tasks fall under the same subject heading, the "
+        "subject is written once and sub-tasks are indented with numbers, "
+        "bullets, or *. You MUST prefix EVERY task title with its subject "
+        'in square brackets, e.g. "[Maths] Complete worksheet p.12" or '
+        '"[中文] 默書溫紙". Always include the subject prefix even for the '
+        "first task under a heading.",
         "",
-        "1. PHOTO DATE: Look at the top-left area of the image for a date (the photo date / header "
-        "date). Extract it as photoDate in YYYY-MM-DD format. If no date is found, set photoDate to "
-        "null.",
-        "",
-        "2. EXTRACT ALL TASKS visible in the image.",
-        "",
-        "3. SUBJECT GROUPING: Tasks in the photo are often grouped by subject using abbreviations "
-        "like M (Maths), E (English), 中 (Chinese), 音 (Music), 人 (Liberal Studies/人文), "
-        "Sci (Science), etc. When multiple tasks fall under the same subject heading, the subject is "
-        "written once and sub-tasks are indented with numbers, bullets, or *. You MUST prefix EVERY "
-        'task title with its subject in square brackets, e.g. "[Maths] Complete worksheet p.12" or '
-        '"[中文] 默書溫紙". Always include the subject prefix even for the first task under a '
-        "heading.",
-        "",
-        f"4. PRIORITY DETECTION: For each task, determine if it is a priority task. A task is priority "
-        f"if its title or content relates to any of these keywords (case-insensitive): {keywords}. "
-        'Set "priority" to true for these tasks, false otherwise.',
-        "",
-        "5. DATE PARSING -- CRITICAL: Dates in the image may appear in various formats. You MUST "
-        "convert them accurately to YYYY-MM-DDTHH:mm:ss. Common formats include:",
+        "3. DATE PARSING -- CRITICAL: Dates in the image may appear in "
+        "various formats. You MUST convert them accurately to "
+        "YYYY-MM-DDTHH:mm:ss. Common formats include:",
         "   - Chinese dates: 6月25日, 六月五日, 6/5, 12月20日",
         "   - Shortened numerical: 6/5, 12/20, 5-6, 20/12",
         "   - With year: 2025年6月5日, 2025/6/5",
         "   - Without year: assume the current or next occurrence based on context",
         "   - If only a date is given with no time, default the time to 09:00:00",
-        "   - For priority tasks (quiz/exam/test/assessment/dictation), pay EXTRA attention to "
-        "correctly reading the due date -- these dates are critical.",
         "",
-        "Return JSON:",
-        "{",
-        '  "type": "todo_list",',
-        '  "photoDate": "YYYY-MM-DD" or null,',
-        '  "tasks": [',
-        "    {",
-        '      "title": "string",',
-        '      "body": "string (additional details; empty string if none)",',
-        '      "dueDateTime": "YYYY-MM-DDTHH:mm:ss" or null,',
-        '      "priority": true or false,',
-        '      "listOverride": "exact list name" or null',
-        "    }",
-        "  ]",
-        "}",
-        "If a task is already marked as done/completed in the image, still include it but prepend "
-        "[DONE] to the title.",
-        "",
-        '--- If type is "event" (and no additional tasks from user instruction) ---',
+        "=== STEP 3: FOR EACH EVENT ===",
         "",
         "Extract the following from the event flier/email/webpage:",
         '- eventName: The name/title of the event (e.g. "Math Olympiad 2026", "School Science Fair")',
@@ -234,34 +262,18 @@ def build_image_prompt(today: str, list_names: list, priority_keywords: list, li
         "two days', 'tonight', 'by Friday'), compute it as YYYY-MM-DDTHH:mm:ss based on today's date. "
         "If the user does not specify a due date, set to null (the app will calculate a default).",
         "",
-        "Return JSON:",
+        "If a task is already marked as done/completed in the image, still include it but prepend "
+        "[DONE] to the title.",
+        "",
+        "Return JSON (tasks/events are empty arrays when none of that kind exist):",
         "{",
-        '  "type": "event",',
-        '  "eventName": "string",',
-        '  "registrationDeadline": "YYYY-MM-DD" or null,',
-        '  "registrationMethod": "string or empty string",',
-        '  "taskDueDateTime": "YYYY-MM-DDTHH:mm:ss" or null,',
-        '  "listOverride": "exact list name" or null',
-        "}",
-        "",
-        '--- If MIXED (image has an event AND user instruction mentions additional tasks, or vice '
-        "versa) ---",
-        "",
-        "When the input contains BOTH event registration items AND regular tasks (e.g. user says "
-        "'register for this event, also english exam next Monday and maths homework by 25 Mar'), you "
-        "MUST return ALL items using this mixed format:",
-        "",
-        "Return JSON:",
-        "{",
-        '  "type": "mixed",',
         '  "photoDate": "YYYY-MM-DD" or null,',
         '  "tasks": [',
         "    {",
         '      "title": "string",',
         '      "body": "string (additional details; empty string if none)",',
         '      "dueDateTime": "YYYY-MM-DDTHH:mm:ss" or null,',
-        '      "priority": true or false,',
-        '      "listOverride": "exact list name" or null',
+        f"      {_ITEM_CONTRACT}",
         "    }",
         "  ],",
         '  "events": [',
@@ -270,21 +282,19 @@ def build_image_prompt(today: str, list_names: list, priority_keywords: list, li
         '      "registrationDeadline": "YYYY-MM-DD" or null,',
         '      "registrationMethod": "string or empty string",',
         '      "taskDueDateTime": "YYYY-MM-DDTHH:mm:ss" or null,',
-        '      "listOverride": "exact list name" or null',
+        f"      {_ITEM_CONTRACT}",
         "    }",
         "  ]",
         "}",
-        "Apply the same PRIORITY DETECTION and DATE PARSING rules to the tasks array.",
         "",
     ]
-    lines.extend(_list_override_block(list_names, list_override_rules))
+    lines.extend(_available_lists_block(list_entries, default_category, list_override_rules))
     lines.append("=== IMPORTANT ===")
     lines.append("Return ONLY a valid JSON object (no other text, no markdown code blocks).")
     return "\n".join(lines)
 
 
-def build_text_prompt(today: str, list_names: list, priority_keywords: list, list_override_rules: list) -> str:
-    keywords = ", ".join(priority_keywords)
+def build_text_prompt(today: str, list_entries: list, default_category: str, list_override_rules: list) -> str:
     lines = [
         f"The user wants to create tasks based on the following natural language input. Today's date "
         f"is {today}.",
@@ -305,9 +315,6 @@ def build_text_prompt(today: str, list_names: list, priority_keywords: list, lis
         "'tomorrow' = next day 09:00, 'in two days' = 2 days from today 09:00, 'next Friday' = the "
         "coming Friday 09:00, etc.)",
         "- Extract any additional notes/details",
-        f"- PRIORITY DETECTION: A task is priority if its title or content relates to any of these "
-        f'keywords (case-insensitive): {keywords}. Set "priority" to true for these tasks, false '
-        "otherwise.",
         "",
         "For events:",
         "- eventName: The name/title of the event",
@@ -317,41 +324,20 @@ def build_text_prompt(today: str, list_names: list, priority_keywords: list, lis
         "",
         "=== RESPONSE FORMAT ===",
         "",
-        "If the input contains ONLY regular tasks (no events):",
+        "Return JSON (tasks/events are empty arrays when none of that kind exist):",
         "{",
-        '  "type": "text_task",',
         '  "tasks": [',
-        '    { "title": "string", "body": "string", "dueDateTime": "YYYY-MM-DDTHH:mm:ss" or null, '
-        '"priority": true or false, "listOverride": "exact list name" or null }',
-        "  ]",
-        "}",
-        "",
-        "If the input contains ONLY event(s) (no regular tasks):",
-        "{",
-        '  "type": "event",',
-        '  "eventName": "string",',
-        '  "registrationDeadline": "YYYY-MM-DD" or null,',
-        '  "registrationMethod": "string or empty string",',
-        '  "taskDueDateTime": "YYYY-MM-DDTHH:mm:ss" or null,',
-        '  "listOverride": "exact list name" or null',
-        "}",
-        "",
-        "If the input contains BOTH events AND regular tasks:",
-        "{",
-        '  "type": "mixed",',
-        '  "tasks": [',
-        '    { "title": "string", "body": "string", "dueDateTime": "YYYY-MM-DDTHH:mm:ss" or null, '
-        '"priority": true or false, "listOverride": "exact list name" or null }',
+        f'    {{ "title": "string", "body": "string", "dueDateTime": "YYYY-MM-DDTHH:mm:ss" or null, {_ITEM_CONTRACT} }}',
         "  ],",
         '  "events": [',
-        '    { "eventName": "string", "registrationDeadline": "YYYY-MM-DD" or null, '
-        '"registrationMethod": "string or empty string", "taskDueDateTime": '
-        '"YYYY-MM-DDTHH:mm:ss" or null, "listOverride": "exact list name" or null }',
+        f'    {{ "eventName": "string", "registrationDeadline": "YYYY-MM-DD" or null, '
+        f'"registrationMethod": "string or empty string", "taskDueDateTime": '
+        f'"YYYY-MM-DDTHH:mm:ss" or null, {_ITEM_CONTRACT} }}',
         "  ]",
         "}",
         "",
     ]
-    lines.extend(_list_override_block(list_names, list_override_rules))
+    lines.extend(_available_lists_block(list_entries, default_category, list_override_rules))
     lines.append("=== IMPORTANT ===")
     lines.append("Return ONLY a valid JSON object (no other text, no markdown code blocks).")
     return "\n".join(lines)
@@ -384,7 +370,7 @@ def call_poe(prompt_text: str, image_data_url: Optional[str] = None) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Response parsing + shaping (processExtractionResult and friends, §7)
+# Response parsing + shaping
 # ---------------------------------------------------------------------------
 
 def _extract_json_object(content: str) -> dict:
@@ -402,7 +388,7 @@ def _extract_json_object(content: str) -> dict:
         raise PoeClientError(f"Could not parse AI response as JSON: {exc}")
 
 
-def _build_event_task(ev: dict, user_instruction: str, upload_date: str) -> dict:
+def _build_event_task(ev: dict, user_instruction: str, upload_date: str, default_category: str) -> dict:
     event_name = (ev.get("eventName") or "Unknown Event").strip()
     deadline = ev.get("registrationDeadline") or None
     reg_method = (ev.get("registrationMethod") or "").strip()
@@ -433,17 +419,17 @@ def _build_event_task(ev: dict, user_instruction: str, upload_date: str) -> dict
         "title": f"Register for {event_name}{deadline_suffix}",
         "body": "\n".join(body_parts),
         "due_datetime": due_datetime_str,
-        "priority": False,
         "checked": True,
         "reminder_datetime": reminder_datetime,
-        "list_name": ev.get("listOverride") or None,
+        "category_identified": ev.get("categoryIdentified") or default_category,
+        "list_identified": ev.get("listIdentified") or None,
         "has_specific_due_date": False,
     }
 
 
 def _build_regular_tasks(
     tasks_arr: list, default_due_datetime: Optional[str], user_instruction: str,
-    input_had_text: bool, priority_keywords: list,
+    input_had_text: bool, default_category: str,
 ) -> list:
     default_date_portion = default_due_datetime.split("T")[0] if default_due_datetime else None
     shaped = []
@@ -468,23 +454,25 @@ def _build_regular_tasks(
 
         title_str = t.get("title") or "Untitled task"
         body_str = t.get("body") or ""
-        # Priority is checked BEFORE appending the user instruction, to
-        # avoid false positives from other tasks' keywords appearing in
-        # the shared user-instruction text.
-        pri = (t.get("priority") is True) or is_priority_task(title_str, body_str, priority_keywords)
+        list_identified = t.get("listIdentified") or None
         if user_instruction:
             body_str = (f"{body_str}\n\n" if body_str else "") + f"User note: {user_instruction}"
 
         date_suffix = f" ({format_date_suffix(ai_date_part)})" if has_specific_due_date else ""
+        # Default-checked heuristic: for photo-only input, a task defaults
+        # checked if the AI found a specific due date OR was confident
+        # enough about the destination list to name one directly -- the
+        # replacement for the old priority-keyword signal, now that
+        # priority itself is gone.
         shaped.append({
             "kind": "task",
             "title": f"{title_str}{date_suffix}",
             "body": body_str,
             "due_datetime": due,
-            "priority": pri,
-            "checked": True if input_had_text else (pri or has_specific_due_date),
+            "checked": True if input_had_text else (list_identified is not None or has_specific_due_date),
             "reminder_datetime": None,
-            "list_name": t.get("listOverride") or None,
+            "category_identified": t.get("categoryIdentified") or default_category,
+            "list_identified": list_identified,
             "has_specific_due_date": has_specific_due_date,
         })
     return shaped
@@ -492,46 +480,29 @@ def _build_regular_tasks(
 
 def parse_and_shape(
     content: str, user_instruction: str, upload_date: str,
-    input_had_text: bool, priority_keywords: list,
+    input_had_text: bool, default_category: str,
 ) -> dict:
-    """Returns {'photo_date': str|None, 'tasks': [shaped task dicts]} --
-    port of processExtractionResult's routing + shaping (plan §7). Each
-    shaped task dict has keys matching crud.add_draft_task's kwargs
-    (kind/title/body/due_datetime/priority/reminder_datetime/list_name/
-    checked/has_specific_due_date). Raises PoeClientError if the response
-    can't be parsed as JSON or doesn't contain a usable tasks/events
-    structure -- deliberately simpler than the current JS's fallback
-    bare-array scan, which was a defensive branch for malformed AI output;
-    not worth porting for a single-user app that can just retry."""
+    """Returns {'photo_date': str|None, 'tasks': [shaped task dicts]}. Each
+    shaped task dict has keys matching crud.add_draft_task's kwargs plus
+    category_identified/list_identified (consumed by api.py's
+    list_matcher.resolve_list call, not stored directly). Raises
+    PoeClientError if the response can't be parsed as JSON or doesn't
+    contain a usable tasks/events structure."""
     parsed = _extract_json_object(content)
-    parsed_type = parsed.get("type")
 
-    if parsed_type == "mixed":
-        photo_date = parsed.get("photoDate") or None
-        events_arr = parsed.get("events") or []
-        reg_tasks_arr = parsed.get("tasks") or []
-        all_tasks = [_build_event_task(ev, user_instruction, upload_date) for ev in events_arr]
-        default_due = None
-        if photo_date and _DATE_ONLY_RE.match(photo_date):
-            default_due = f"{get_next_business_day(photo_date)}T09:00:00"
-        all_tasks += _build_regular_tasks(
-            reg_tasks_arr, default_due, user_instruction, input_had_text, priority_keywords
-        )
-        return {"photo_date": photo_date, "tasks": all_tasks}
-
-    if parsed_type == "event":
-        return {"photo_date": None, "tasks": [_build_event_task(parsed, user_instruction, upload_date)]}
-
-    # todo_list or text_task
-    tasks_arr = parsed.get("tasks")
-    if not isinstance(tasks_arr, list):
-        raise PoeClientError("AI response did not include a tasks array")
     photo_date = parsed.get("photoDate") or None
+    events_arr = parsed.get("events") or []
+    tasks_arr = parsed.get("tasks") or []
+    if not isinstance(events_arr, list) or not isinstance(tasks_arr, list):
+        raise PoeClientError("AI response did not include usable tasks/events arrays")
+
     default_due_datetime = None
     if photo_date and _DATE_ONLY_RE.match(photo_date):
         default_due_datetime = f"{get_next_business_day(photo_date)}T09:00:00"
-    all_tasks = _build_regular_tasks(
-        tasks_arr, default_due_datetime, user_instruction, input_had_text, priority_keywords
+
+    all_tasks = [_build_event_task(ev, user_instruction, upload_date, default_category) for ev in events_arr]
+    all_tasks += _build_regular_tasks(
+        tasks_arr, default_due_datetime, user_instruction, input_had_text, default_category
     )
     return {"photo_date": photo_date, "tasks": all_tasks}
 
@@ -541,8 +512,8 @@ def parse_and_shape(
 # ---------------------------------------------------------------------------
 
 def extract(
-    image_data_url: Optional[str], text: Optional[str], timezone: str, list_names: list,
-    priority_keywords: list, list_override_rules: list,
+    image_data_url: Optional[str], text: Optional[str], timezone: str, list_entries: list,
+    default_category: str, list_override_rules: list,
 ) -> dict:
     """Builds the right prompt variant (image / image+text / text-only),
     calls Poe, parses + shapes the result. Raises PoeClientError on any
@@ -556,7 +527,7 @@ def extract(
     upload_date = today_date(timezone)
 
     if has_photo and user_text:
-        prompt = build_image_prompt(upload_date, list_names, priority_keywords, list_override_rules)
+        prompt = build_image_prompt(upload_date, list_entries, default_category, list_override_rules)
         prompt += (
             "\n\n=== USER INSTRUCTION ===\n"
             "The user provided the following instruction alongside the image. Use it as your PRIMARY "
@@ -565,12 +536,12 @@ def extract(
             f'User says: "{user_text}"'
         )
     elif has_photo:
-        prompt = build_image_prompt(upload_date, list_names, priority_keywords, list_override_rules)
+        prompt = build_image_prompt(upload_date, list_entries, default_category, list_override_rules)
     else:
-        prompt = build_text_prompt(upload_date, list_names, priority_keywords, list_override_rules)
+        prompt = build_text_prompt(upload_date, list_entries, default_category, list_override_rules)
         prompt += f'\n\nUser input: "{user_text}"'
 
     content = call_poe(prompt, image_data_url if has_photo else None)
     return parse_and_shape(
-        content, user_text, upload_date, input_had_text=bool(user_text), priority_keywords=priority_keywords
+        content, user_text, upload_date, input_had_text=bool(user_text), default_category=default_category
     )

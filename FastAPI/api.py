@@ -20,6 +20,7 @@ import crud
 import database
 import graph_client
 import helpers
+import list_matcher
 import poe_client
 import schemas
 
@@ -88,17 +89,18 @@ async def extract_route(
     conn: sqlite3.Connection = Depends(get_db),
 ):
     """multipart (image?) + text? + timezone -> Poe extraction (settings-
-    backed prompt rules) + server-side shaping (decision 8) -> creates a
-    draft, returns it. Falls back to an empty list-override block (same as
-    the current JS's fetchListNamesForPrompt) if MS isn't linked yet or the
-    lists call fails -- extraction shouldn't be blocked by that."""
+    backed prompt rules, list_table-backed category/list routing) ->
+    server-side shaping (decision 8) -> creates a draft, returns it.
+
+    list_table (not a live MS Graph call) is the source of truth for what
+    the AI is told about -- no network call to MS needed just to build the
+    prompt. The AI resolves categoryIdentified/listIdentified itself;
+    list_matcher.resolve_list then applies the small deterministic
+    fallback (category default list, or unmatched for manual assignment
+    in the review UI)."""
     settings = crud.get_settings(conn)
     tz = timezone or settings["default_timezone"]
-
-    try:
-        list_names = [lst["displayName"] for lst in graph_client.list_lists()]
-    except Exception:
-        list_names = []
+    list_entries = crud.list_all_list_entries(conn)
 
     image_data_url = None
     photo_data_b64 = None
@@ -108,8 +110,8 @@ async def extract_route(
         image_data_url = poe_client.to_data_url(raw, image.content_type or "image/jpeg")
 
     result = poe_client.extract(
-        image_data_url, text, tz, list_names,
-        settings["priority_keywords"], settings["list_override_rules"],
+        image_data_url, text, tz, list_entries,
+        settings["default_category"], settings["list_override_rules"],
     )
 
     if image is not None and (text or "").strip():
@@ -121,11 +123,12 @@ async def extract_route(
 
     draft_id = crud.create_draft(conn, source=source, photo_data=photo_data_b64, created_via="web")
     for t in result["tasks"]:
+        matched = list_matcher.resolve_list(t["category_identified"], t["list_identified"], list_entries)
         crud.add_draft_task(
             conn, draft_id,
             kind=t["kind"], title=t["title"], body=t["body"] or None,
-            due_datetime=t["due_datetime"], timezone=tz, priority=t["priority"],
-            reminder_datetime=t["reminder_datetime"], list_name=t["list_name"],
+            due_datetime=t["due_datetime"], timezone=tz,
+            reminder_datetime=t["reminder_datetime"], list_name=matched["list_name"] if matched else None,
             checked=t["checked"], has_specific_due_date=t["has_specific_due_date"],
         )
     draft = crud.get_draft(conn, draft_id)
@@ -153,14 +156,28 @@ def get_draft_route(draft_id: str, conn: sqlite3.Connection = Depends(get_db)):
     return _get_draft_or_404(conn, draft_id)
 
 
+def _resolve_category_to_list_name(conn: sqlite3.Connection, category: Optional[str]) -> Optional[str]:
+    """Shared by add/edit draft-task routes: category isn't stored, it's
+    resolved to a list_name via the same list_matcher.resolve_list used by
+    extraction (category's list_is_category_default-flagged list, or None
+    if there isn't exactly one) -- the MCP-compatibility lever that lets an
+    agent say 'add this under Tony' without knowing Tony's exact default
+    list name."""
+    if not category:
+        return None
+    matched = list_matcher.resolve_list(category, None, crud.list_all_list_entries(conn))
+    return matched["list_name"] if matched else None
+
+
 @router.post("/drafts/{draft_id}/tasks", tags=["Drafts"], status_code=201)
 def add_draft_task_route(draft_id: str, data: schemas.DraftTaskCreate, conn: sqlite3.Connection = Depends(get_db)):
     _get_draft_or_404(conn, draft_id)
+    list_name = data.list_name or _resolve_category_to_list_name(conn, data.category)
     crud.add_draft_task(
         conn, draft_id,
         kind=data.kind, title=data.title, body=data.body, due_datetime=data.due_datetime,
-        timezone=data.timezone, priority=data.priority, reminder_datetime=data.reminder_datetime,
-        list_name=data.list_name, checked=data.checked,
+        timezone=data.timezone, reminder_datetime=data.reminder_datetime,
+        list_name=list_name, checked=data.checked,
     )
     return crud.get_draft(conn, draft_id)
 
@@ -169,10 +186,13 @@ def add_draft_task_route(draft_id: str, data: schemas.DraftTaskCreate, conn: sql
 def update_draft_task_route(
     draft_id: str, task_id: str, data: schemas.DraftTaskUpdate, conn: sqlite3.Connection = Depends(get_db)
 ):
-    fields = {
-        schemas.DRAFT_TASK_FIELD_MAP[key]: value
-        for key, value in data.model_dump(exclude_unset=True).items()
-    }
+    raw = data.model_dump(exclude_unset=True)
+    category = raw.pop("category", None)
+    if "list_name" not in raw and category:
+        resolved = _resolve_category_to_list_name(conn, category)
+        if resolved:
+            raw["list_name"] = resolved
+    fields = {schemas.DRAFT_TASK_FIELD_MAP[key]: value for key, value in raw.items()}
     return crud.update_draft_task(conn, draft_id, task_id, **fields)
 
 
@@ -230,7 +250,8 @@ def sync_draft_route(draft_id: str, data: schemas.DraftSyncRequest, conn: sqlite
 
 
 # ---------------------------------------------------------------------------
-# MS To Do lists
+# MS To Do lists (raw Graph passthrough) + list_table (category/keyword
+# config -- list_table refactor)
 # ---------------------------------------------------------------------------
 
 
@@ -240,8 +261,37 @@ def list_lists_route():
 
 
 @router.post("/lists", tags=["Lists"], status_code=201)
-def create_list_route(data: schemas.ListCreate):
-    return graph_client.create_list(data.list_name)
+def create_list_route(data: schemas.ListCreate, conn: sqlite3.Connection = Depends(get_db)):
+    """Raw MS-Graph-only list creation -- used when a user manually
+    assigns a brand-new list name to an unmatched task in the review
+    modal. Also inserts a blank list_table row (no category/keywords yet)
+    so the new list is available for annotation afterward instead of
+    vanishing -- it just won't participate in auto-routing until
+    annotated."""
+    created = graph_client.create_list(data.list_name)
+    crud.add_list_entry(conn, list_name=data.list_name, list_ms_id=created["id"])
+    return created
+
+
+@router.get("/list-entries", tags=["List Entries"])
+def list_list_entries_route(conn: sqlite3.Connection = Depends(get_db)):
+    return crud.list_all_list_entries(conn)
+
+
+@router.post("/list-entries", tags=["List Entries"], status_code=201)
+def create_list_entry_route(data: schemas.ListEntryCreate, conn: sqlite3.Connection = Depends(get_db)):
+    return crud.add_list_entry(conn, **data.model_dump())
+
+
+@router.patch("/list-entries/{list_id}", tags=["List Entries"])
+def update_list_entry_route(list_id: str, data: schemas.ListEntryUpdate, conn: sqlite3.Connection = Depends(get_db)):
+    return crud.update_list_entry(conn, list_id, **data.model_dump(exclude_unset=True))
+
+
+@router.delete("/list-entries/{list_id}", tags=["List Entries"])
+def delete_list_entry_route(list_id: str, conn: sqlite3.Connection = Depends(get_db)):
+    crud.delete_list_entry(conn, list_id)
+    return {"deleted": True}
 
 
 # ---------------------------------------------------------------------------

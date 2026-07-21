@@ -137,20 +137,94 @@ def get_config() -> dict:
 
 @mcp.tool()
 def get_settings() -> dict:
-    """The editable extraction rules: priority_keywords, list_override_rules,
-    default_list_name_priority/other/event, default_timezone,
-    lite_mode_list_names. Read this if you need to explain to the user why
-    a task was (or wasn't) flagged priority, or which list a task would
-    default to."""
+    """The editable extraction rules: list_override_rules (phrasing
+    patterns the AI recognizes as an explicit list instruction),
+    default_timezone, and default_category (the category assumed for a
+    task/event unless the input explicitly indicates otherwise). For
+    per-list category/keyword configuration -- which drives the actual
+    routing decision -- use list_config_entries instead."""
     return _api("GET", "/api/settings")
 
 
 @mcp.tool()
 def list_task_lists() -> list:
-    """The user's actual Microsoft To Do lists (id + displayName). Useful
-    before calling sync_draft with list_assignments, to check exact list
-    names/ids rather than guessing."""
+    """The user's actual Microsoft To Do lists (id + displayName), fetched
+    live from MS Graph. Useful before calling sync_draft with
+    list_assignments, to check exact list names/ids rather than guessing.
+    For the category/keyword configuration behind automatic routing (not
+    just the raw list names), use list_config_entries instead."""
     return _api("GET", "/api/lists")
+
+
+# ---------------------------------------------------------------------------
+# list_table (list_table refactor) -- category/keyword config per list,
+# read/write so an agent can explain or manage routing conversationally,
+# not just through the Settings GUI.
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def list_config_entries() -> list:
+    """Every configured list_table row: list_name, list_alt_names
+    (recognized synonyms), list_category (who/what context, e.g. a
+    person's name), list_keywords (what kind of task routes here within
+    that category), list_is_category_default (the fallback list for its
+    category when nothing more specific matches). Read this to explain to
+    the user why a task landed on a particular list, or before adding a
+    new category."""
+    return _api("GET", "/api/list-entries")
+
+
+@mcp.tool()
+def add_list_entry(
+    list_name: str, list_alt_names: Optional[list] = None, list_category: Optional[list] = None,
+    list_keywords: Optional[list] = None, list_is_category_default: bool = False,
+) -> dict:
+    """Adds a new list_table row -- e.g. to set up a brand-new category
+    ("add a Tony quiz list") purely through conversation. list_name should
+    match (or will become) a real Microsoft To Do list -- check
+    list_task_lists first if you're not sure it already exists.
+    list_is_category_default=True makes this the fallback for its
+    category when the AI can't confidently pick a more specific list;
+    setting it unsets that flag on any other list sharing the category."""
+    payload = {"list_name": list_name, "list_is_category_default": list_is_category_default}
+    if list_alt_names is not None:
+        payload["list_alt_names"] = list_alt_names
+    if list_category is not None:
+        payload["list_category"] = list_category
+    if list_keywords is not None:
+        payload["list_keywords"] = list_keywords
+    return _api("POST", "/api/list-entries", json=payload)
+
+
+@mcp.tool()
+def update_list_entry(
+    list_id: str, list_name: Optional[str] = None, list_alt_names: Optional[list] = None,
+    list_category: Optional[list] = None, list_keywords: Optional[list] = None,
+    list_is_category_default: Optional[bool] = None,
+) -> dict:
+    """Edits one or more fields on an existing list_table row (list_id
+    from list_config_entries). Only pass the fields actually changing."""
+    payload = {}
+    if list_name is not None:
+        payload["list_name"] = list_name
+    if list_alt_names is not None:
+        payload["list_alt_names"] = list_alt_names
+    if list_category is not None:
+        payload["list_category"] = list_category
+    if list_keywords is not None:
+        payload["list_keywords"] = list_keywords
+    if list_is_category_default is not None:
+        payload["list_is_category_default"] = list_is_category_default
+    return _api("PATCH", f"/api/list-entries/{list_id}", json=payload)
+
+
+@mcp.tool()
+def delete_list_entry(list_id: str) -> dict:
+    """Removes a list_table row (list_id from list_config_entries) -- does
+    NOT delete the real Microsoft To Do list, only its category/keyword
+    configuration here."""
+    return _api("DELETE", f"/api/list-entries/{list_id}")
 
 
 # ---------------------------------------------------------------------------
@@ -173,11 +247,21 @@ def extract_tasks(
     present these tasks back to the user (e.g. as a list) before calling
     sync_draft; never sync silently.
 
+    Each task's task_list_name reflects the app's own automatic category/
+    keyword routing (list_config_entries) -- confidently-routed and
+    default-routed tasks already have a list; null means genuinely
+    unmatched and needs a list before syncing (pass it via sync_draft's
+    list_assignments, or edit_draft_task with list_name/category). A free
+    text instruction like "put these under Tony" or "put this in the
+    household list" is recognized automatically -- no separate call
+    needed.
+
     Each task's task_checked reflects the app's own default-selection
-    rules (priority/date-specific tasks default checked when the input
-    was photo-only; everything defaults checked when any text was given)
-    -- treat this as a starting point, but the user's own instructions in
-    this conversation take precedence over it.
+    rules (date-specific tasks, or tasks the AI confidently routed to a
+    list, default checked when the input was photo-only; everything
+    defaults checked when any text was given) -- treat this as a starting
+    point, but the user's own instructions in this conversation take
+    precedence over it.
 
     timezone affects both how due dates are interpreted and what's sent to
     Microsoft To Do at sync time -- omit it to use the app's configured
@@ -207,14 +291,19 @@ def get_draft(draft_id: str) -> dict:
 def add_draft_task(
     draft_id: str, kind: str, title: str,
     body: Optional[str] = None, due_datetime: Optional[str] = None,
-    timezone: Optional[str] = None, priority: bool = False,
+    timezone: Optional[str] = None,
     reminder_datetime: Optional[str] = None, list_name: Optional[str] = None,
-    checked: bool = True,
+    category: Optional[str] = None, checked: bool = True,
 ) -> dict:
     """Adds a new task to an existing draft (kind: 'task' or 'event').
-    Returns the full updated draft -- show it to the user so they can
-    confirm the add looks right before any sync."""
-    payload = {"kind": kind, "title": title, "priority": priority, "checked": checked}
+    Give list_name if you know the exact destination list; otherwise give
+    category (e.g. "Tony") and the app resolves it to that category's
+    default list itself -- you don't need to already know which specific
+    list that is (check list_config_entries if you want to know anyway).
+    list_name wins if both are given. Returns the full updated draft --
+    show it to the user so they can confirm the add looks right before
+    any sync."""
+    payload = {"kind": kind, "title": title, "checked": checked}
     if body is not None:
         payload["body"] = body
     if due_datetime is not None:
@@ -225,6 +314,8 @@ def add_draft_task(
         payload["reminder_datetime"] = reminder_datetime
     if list_name is not None:
         payload["list_name"] = list_name
+    if category is not None:
+        payload["category"] = category
     return _api("POST", f"/api/drafts/{draft_id}/tasks", json=payload)
 
 
@@ -233,17 +324,21 @@ def edit_draft_task(
     draft_id: str, task_id: str,
     title: Optional[str] = None, body: Optional[str] = None,
     due_datetime: Optional[str] = None, timezone: Optional[str] = None,
-    priority: Optional[bool] = None, reminder_datetime: Optional[str] = None,
+    reminder_datetime: Optional[str] = None,
     list_name: Optional[str] = None, list_id: Optional[str] = None,
-    checked: Optional[bool] = None,
+    category: Optional[str] = None, checked: Optional[bool] = None,
 ) -> dict:
     """Edits one or more fields on an existing draft task. task_id must be
     an exact id from a previous get_draft/extract_tasks/add_draft_task
     result -- resolve which task the user means yourself (e.g. "the quiz
     one") using the draft state already in front of you; never guess by
     position ("the second one"). Only pass the fields actually changing --
-    everything else is left untouched. Returns the full updated draft --
-    always show it back to the user so they can catch a misinterpretation
+    everything else is left untouched.
+
+    category works the same as on add_draft_task (resolved to that
+    category's default list) -- only applied when list_name isn't also
+    given in this same call. Returns the full updated draft -- always
+    show it back to the user so they can catch a misinterpretation
     immediately, rather than assuming the edit landed as intended."""
     payload = {}
     if title is not None:
@@ -254,14 +349,14 @@ def edit_draft_task(
         payload["due_datetime"] = due_datetime
     if timezone is not None:
         payload["timezone"] = timezone
-    if priority is not None:
-        payload["priority"] = priority
     if reminder_datetime is not None:
         payload["reminder_datetime"] = reminder_datetime
     if list_name is not None:
         payload["list_name"] = list_name
     if list_id is not None:
         payload["list_id"] = list_id
+    if category is not None:
+        payload["category"] = category
     if checked is not None:
         payload["checked"] = checked
     return _api("PATCH", f"/api/drafts/{draft_id}/tasks/{task_id}", json=payload)
@@ -288,7 +383,11 @@ def sync_draft(draft_id: str, list_assignments: Optional[dict] = None) -> dict:
     list_assignments is optional: {task_id: list_name} overrides for tasks
     that don't already have a list assigned (or to redirect one that
     does) -- everything else syncs using whatever list is already stored
-    on it. A list that doesn't exist yet is created automatically.
+    on it. A list_assignments name that doesn't exist yet in Microsoft To
+    Do is created automatically -- but this only applies to THIS manual
+    override path; the AI's own automatic routing (during extract_tasks)
+    never invents a new list itself, it only ever names one of the
+    already-configured list_config_entries or leaves the task unmatched.
 
     Returns {"draft": ..., "results": [...]} -- each result is per-task
     ("synced" or "failed" with a detail). Report any failures to the user
