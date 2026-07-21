@@ -429,6 +429,37 @@ def list_draft_tasks(conn: sqlite3.Connection, draft_id: str) -> list[dict]:
     return [_task_row_to_dict(r) for r in rows]
 
 
+def list_drafts(conn: sqlite3.Connection) -> list[dict]:
+    """Summary view for the 'My Drafts' page/MCP tool -- task_count only,
+    not the full nested tasks (GET /api/drafts/{id} is for that). Most
+    recent first, since that's almost always what you want to resume or
+    clean up."""
+    rows = conn.execute(
+        """
+        SELECT d.*, COUNT(t.task_id) AS task_count
+        FROM draft_table d
+        LEFT JOIN draft_task_table t ON t.draft_id = d.draft_id
+        GROUP BY d.draft_id
+        ORDER BY d.draft_create_datetime_UTC DESC, d.draft_id DESC
+        """
+        # draft_id as a secondary key: utc_now_iso() truncates to whole
+        # seconds, so two drafts created within the same second would
+        # otherwise tie -- draft_id's zero-padded sequence number breaks
+        # the tie in true creation order.
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_draft(conn: sqlite3.Connection, draft_id: str) -> None:
+    """Hard delete, same no-audit-requirement reasoning as
+    delete_draft_task (decision 4) -- deletes the draft's tasks first
+    since draft_task_table's FK has no ON DELETE CASCADE."""
+    _require_exists(conn, "draft_table", "draft_id", draft_id, "draft_id")
+    conn.execute("DELETE FROM draft_task_table WHERE draft_id = ?", (draft_id,))
+    conn.execute("DELETE FROM draft_table WHERE draft_id = ?", (draft_id,))
+    conn.commit()
+
+
 def add_draft_task(
     conn: sqlite3.Connection,
     draft_id: str,

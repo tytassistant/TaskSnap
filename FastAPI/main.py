@@ -227,3 +227,8 @@ def index_page(request: Request):
 @app.get("/settings")
 def settings_page(request: Request):
     return templates.TemplateResponse(request=request, name="settings.html")
+
+
+@app.get("/drafts")
+def drafts_page(request: Request):
+    return templates.TemplateResponse(request=request, name="drafts.html")

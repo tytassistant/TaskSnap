@@ -151,9 +151,27 @@ def _get_draft_or_404(conn: sqlite3.Connection, draft_id: str) -> dict:
     return draft
 
 
+@router.get("/drafts", tags=["Drafts"])
+def list_drafts_route(conn: sqlite3.Connection = Depends(get_db)):
+    """Summary list (task_count only) for the 'My Drafts' page -- most
+    recent first. GET /api/drafts/{id} below is for a single draft's
+    full task list."""
+    return crud.list_drafts(conn)
+
+
 @router.get("/drafts/{draft_id}", tags=["Drafts"])
 def get_draft_route(draft_id: str, conn: sqlite3.Connection = Depends(get_db)):
     return _get_draft_or_404(conn, draft_id)
+
+
+@router.delete("/drafts/{draft_id}", tags=["Drafts"])
+def delete_draft_route(draft_id: str, conn: sqlite3.Connection = Depends(get_db)):
+    """Deletes a whole draft and its tasks -- for the 'My Drafts' page's
+    cleanup action. No audit requirement (decision 4), same as deleting
+    a single draft task."""
+    _get_draft_or_404(conn, draft_id)
+    crud.delete_draft(conn, draft_id)
+    return {"deleted": True}
 
 
 def _resolve_category_to_list_name(conn: sqlite3.Connection, category: Optional[str]) -> Optional[str]:

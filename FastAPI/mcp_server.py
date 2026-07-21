@@ -280,11 +280,32 @@ def extract_tasks(
 
 
 @mcp.tool()
+def list_drafts() -> list:
+    """Every draft that exists (not just the one from this conversation) --
+    draft_id, status ('open'/'synced'/'abandoned'), source, created time,
+    and task_count (not the full task list -- use get_draft for that).
+    Most recent first. Useful if the user asks about a past extraction you
+    don't have in context, or wants to clean up old ones."""
+    return _api("GET", "/api/drafts")
+
+
+@mcp.tool()
 def get_draft(draft_id: str) -> dict:
     """Current state of a draft, including all its tasks. Call this to
     re-ground yourself if the conversation has gone on for a while --
     always trust this over your own memory of the draft's contents."""
     return _api("GET", f"/api/drafts/{draft_id}")
+
+
+@mcp.tool()
+def delete_draft(draft_id: str) -> dict:
+    """Deletes a whole draft and all its tasks -- for cleaning up an old
+    or unwanted extraction. This is NOT the same as sync_draft's tasks
+    being removed from Microsoft To Do -- an already-synced task is
+    untouched by this; it only removes the draft's own bookkeeping.
+    Confirm with the user before calling this if the draft has any tasks
+    -- there's no undo."""
+    return _api("DELETE", f"/api/drafts/{draft_id}")
 
 
 @mcp.tool()

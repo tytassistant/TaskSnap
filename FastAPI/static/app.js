@@ -993,6 +993,31 @@ function populateTimezoneSelect() {
   });
 }
 
+// ========== RESUME A DRAFT (from the My Drafts page, /?draft=<id>) ==========
+// draft_photo_data is stored as raw base64 with no persisted content-type
+// (extraction never keeps the original MIME type past the Poe call) --
+// image/jpeg is the same fallback extract_route itself uses, good enough
+// for redisplaying a thumbnail/lightbox source.
+async function resumeDraft(draftId) {
+  try {
+    var draft = await apiFetch("/api/drafts/" + draftId);
+    applyDraftResponse(draft);
+    if (draft.draft_photo_data) {
+      state.photoDataUrl = "data:image/jpeg;base64," + draft.draft_photo_data;
+      previewImg.src = state.photoDataUrl;
+    }
+    showPhotoThumbnail();
+    updateStepper(2);
+    showSection("review");
+    renderPhotoDate();
+    renderTasks();
+    addTaskBtn.style.display = "";
+    reviewActions.style.display = "flex";
+  } catch (err) {
+    showToast("Could not load draft: " + err.message, "error");
+  }
+}
+
 (async function init() {
   populateTimezoneSelect();
   updateStepper(1);
@@ -1003,4 +1028,7 @@ function populateTimezoneSelect() {
     state.msLinked = !!config.ms_linked;
     msLinkNotice.style.display = state.msLinked ? "none" : "";
   } catch (ignored) { /* keep UI usable even if config can't be read */ }
+
+  var resumeId = new URLSearchParams(window.location.search).get("draft");
+  if (resumeId) { await resumeDraft(resumeId); }
 })();
