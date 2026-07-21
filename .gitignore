@@ -3,6 +3,7 @@
 
 # FastAPI backend runtime data / secrets
 FastAPI/tasksnap.db
+FastAPI/tasksnap.bak-*.db
 FastAPI/.session-secret
 FastAPI/.ms-token-key
 FastAPI/.tasksnap-api-key
