@@ -46,16 +46,6 @@
 
   <!-- Extraction rules (decision 6) -->
   <div class="card">
-    <div class="card-title">Priority detection</div>
-    <div class="card-desc">
-      A task is flagged priority if its title or notes contain any of these keywords (case-insensitive). One per line.
-    </div>
-    <div class="field">
-      <textarea id="priorityKeywords" rows="6" placeholder="quiz&#10;exam&#10;test"></textarea>
-    </div>
-  </div>
-
-  <div class="card">
     <div class="card-title">List-override examples</div>
     <div class="card-desc">
       Extra example phrasings shown to the AI for detecting when you've explicitly named a list
@@ -70,45 +60,34 @@
   <div class="card">
     <div class="card-title">Defaults</div>
     <div class="field">
+      <label>Default category</label>
+      <select id="defaultCategory"></select>
+    </div>
+    <div class="field">
       <label>Default timezone</label>
       <select id="defaultTimezone"></select>
-    </div>
-    <div class="field">
-      <label>Default list — priority tasks</label>
-      <input type="text" id="defaultListPriority" placeholder="e.g. Quiz List">
-    </div>
-    <div class="field">
-      <label>Default list — other tasks</label>
-      <input type="text" id="defaultListOther" placeholder="e.g. Homework">
-    </div>
-    <div class="field">
-      <label>Default list — event registrations</label>
-      <input type="text" id="defaultListEvent" placeholder="e.g. Household Tasks">
-    </div>
-  </div>
-
-  <div class="card">
-    <div class="card-title">Lite mode lists</div>
-    <div class="card-desc">
-      When lite mode is on, tasks sync immediately to these lists without showing the list-picker modal.
-    </div>
-    <div class="field">
-      <label>Priority</label>
-      <input type="text" id="liteListPriority" placeholder="e.g. Quiz List">
-    </div>
-    <div class="field">
-      <label>Other</label>
-      <input type="text" id="liteListOther" placeholder="e.g. Homework">
-    </div>
-    <div class="field">
-      <label>Event registrations</label>
-      <input type="text" id="liteListEvent" placeholder="e.g. Household Tasks">
     </div>
   </div>
 
   <button class="btn btn-primary btn-block" id="saveBtn" type="button">
     <i class="fas fa-floppy-disk"></i> Save settings
   </button>
+
+  <!-- Manage lists (list_table refactor) -->
+  <div class="card">
+    <div class="card-title">Manage lists</div>
+    <div class="card-desc">
+      Each row is one Microsoft To Do list, tagged with a category (who/what context, e.g. a
+      person's name) and keywords (what kind of task routes here within that category). The AI
+      extraction pass uses these to route tasks automatically — alt names are other ways you might
+      refer to this list; you don't need to repeat the list name itself there.
+    </div>
+    <div id="listEntriesContainer"></div>
+    <button class="btn btn-outline btn-sm" id="addListEntryBtn" type="button" style="margin-top:10px;">
+      <i class="fas fa-plus"></i> Add list
+    </button>
+    <datalist id="msListsDatalist"></datalist>
+  </div>
 
 </div>
 

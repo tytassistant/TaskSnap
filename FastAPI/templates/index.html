@@ -183,56 +183,15 @@
     </div>
   </div>
 
-  <!-- ======= LIST SELECTOR MODAL ======= -->
+  <!-- ======= LIST SELECTOR MODAL =======
+       Sections are fully dynamic (list_table refactor) -- one per list the
+       server already routed tasks to (change control included), plus one
+       "Unmatched" section requiring a pick for anything the AI couldn't
+       confidently route. No more fixed priority/other/event buckets. -->
   <div class="modal-overlay" id="listModal">
     <div class="modal-box">
       <h3>Choose task lists</h3>
-      <p>Select which Microsoft To Do list each group should sync to.</p>
-
-      <div id="modalPrioritySection" style="display:none;">
-        <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
-          <i class="fas fa-fire" style="color:var(--danger); font-size:13px;"></i>
-          <span style="font-size:13px; font-weight:700; color:var(--danger); text-transform:uppercase; letter-spacing:0.04em;" id="modalPriorityLabel">Priority (0)</span>
-        </div>
-        <div class="field" style="margin-bottom:8px;">
-          <select id="listSelectPriority">
-            <option value="">Loading lists…</option>
-          </select>
-        </div>
-        <div class="field" style="margin-bottom:16px;">
-          <input type="text" id="newListInputPriority" placeholder="Or create new list (optional)">
-        </div>
-      </div>
-
-      <div id="modalOtherSection" style="display:none;">
-        <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
-          <i class="fas fa-list-check" style="color:var(--text-tertiary); font-size:13px;"></i>
-          <span style="font-size:13px; font-weight:700; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.04em;" id="modalOtherLabel">Other Tasks (0)</span>
-        </div>
-        <div class="field" style="margin-bottom:8px;">
-          <select id="listSelectOther">
-            <option value="">Loading lists…</option>
-          </select>
-        </div>
-        <div class="field" style="margin-bottom:16px;">
-          <input type="text" id="newListInputOther" placeholder="Or create new list (optional)">
-        </div>
-      </div>
-
-      <div id="modalEventSection" style="display:none;">
-        <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
-          <i class="fas fa-ticket" style="color:var(--danger); font-size:13px;"></i>
-          <span style="font-size:13px; font-weight:700; color:var(--danger); text-transform:uppercase; letter-spacing:0.04em;" id="modalEventLabel">Event Registration (0)</span>
-        </div>
-        <div class="field" style="margin-bottom:8px;">
-          <select id="listSelectEvent">
-            <option value="">Loading lists…</option>
-          </select>
-        </div>
-        <div class="field" style="margin-bottom:16px;">
-          <input type="text" id="newListInputEvent" placeholder="Or create new list (optional)">
-        </div>
-      </div>
+      <p>Review which Microsoft To Do list each group will sync to.</p>
 
       <div id="modalCustomSections"></div>
       <div id="modalUnmatchedSections"></div>

@@ -37,7 +37,6 @@ var state = {
   msLinked: false,
 };
 
-var priorityKeywords = [];
 var lastUserInstruction = "";
 var lastInputHadText = false;
 var smartPasteDataUrl = null;
@@ -90,18 +89,6 @@ var newScanBtn = $id("newScanBtn");
 var listModal = $id("listModal");
 var listModalCancel = $id("listModalCancel");
 var listModalConfirm = $id("listModalConfirm");
-var modalPrioritySection = $id("modalPrioritySection");
-var modalOtherSection = $id("modalOtherSection");
-var modalEventSection = $id("modalEventSection");
-var modalPriorityLabel = $id("modalPriorityLabel");
-var modalOtherLabel = $id("modalOtherLabel");
-var modalEventLabel = $id("modalEventLabel");
-var listSelectPriority = $id("listSelectPriority");
-var listSelectOther = $id("listSelectOther");
-var listSelectEvent = $id("listSelectEvent");
-var newListInputPriority = $id("newListInputPriority");
-var newListInputOther = $id("newListInputOther");
-var newListInputEvent = $id("newListInputEvent");
 
 var lightboxOverlay = $id("lightboxOverlay");
 var lightboxClose = $id("lightboxClose");
@@ -185,11 +172,9 @@ function apiJson(method, url, body) {
 }
 
 // ---------------------------------------------------------------------------
-// Draft <-> internal task shape mapping. Rendering/interaction code below
-// uses the SAME field names (title/body/dueDateTime/priority/checked/
-// isEvent/listOverride/synced) as the original app's state.tasks objects,
-// so that code could be ported with minimal changes -- only how edits get
-// PERSISTED changed (a PATCH/POST/DELETE call now, not just a local mutation).
+// Draft <-> internal task shape mapping. listName is the list the server
+// already resolved this task to (list_table refactor) -- null means
+// unmatched, needs a pick in the list modal before sync.
 // ---------------------------------------------------------------------------
 
 function taskFromApi(t) {
@@ -201,9 +186,11 @@ function taskFromApi(t) {
     body: t.task_body || "",
     dueDateTime: t.task_due_datetime,
     timezone: t.task_timezone,
-    priority: !!t.task_priority,
     reminderDateTime: t.task_reminder_datetime,
-    listOverride: t.task_list_name,
+    // The list the server already resolved this task to (AI routing +
+    // list_matcher's deterministic fallback) -- null means genuinely
+    // unmatched, needs a manual pick in the list modal before sync.
+    listName: t.task_list_name,
     checked: !!t.task_checked,
     synced: !!t.task_synced,
     syncedTaskId: t.task_synced_task_id,
@@ -215,20 +202,6 @@ function applyDraftResponse(draft) {
   state.draftStatus = draft.draft_status;
   state.tasks = (draft.tasks || []).map(taskFromApi);
   if (draft.photo_date !== undefined) { state.photoDate = draft.photo_date; }
-}
-
-// ---------------------------------------------------------------------------
-// Priority keyword recompute (client-side, using the settings-backed
-// keyword list fetched at page load -- NOT hardcoded, decision 6). Mirrors
-// poe_client.py's is_priority_task exactly.
-// ---------------------------------------------------------------------------
-
-function isPriorityTask(title, body) {
-  var combined = ((title || "") + " " + (body || "")).toLowerCase();
-  for (var k = 0; k < priorityKeywords.length; k++) {
-    if (combined.indexOf(priorityKeywords[k].toLowerCase()) !== -1) { return true; }
-  }
-  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -464,9 +437,9 @@ extractBtn.addEventListener("click", function() {
       renderPhotoDate();
       renderTasks();
       if (state.tasks.length > 0) {
-        var priCount = state.tasks.filter(function(t) { return t.priority; }).length;
+        var unmatchedCount = state.tasks.filter(function(t) { return !t.listName; }).length;
         var msg = "Extracted " + state.tasks.length + " task" + (state.tasks.length > 1 ? "s" : "");
-        if (priCount > 0) { msg += " (" + priCount + " priority)"; }
+        if (unmatchedCount > 0) { msg += " (" + unmatchedCount + " need a list)"; }
         showToast(msg, "success");
       } else {
         showToast("No tasks found. You can add tasks manually.", "info");
@@ -485,22 +458,22 @@ extractBtn.addEventListener("click", function() {
 });
 
 // ========== LITE MODE ==========
-// Simplified from the original: the server already computes task_checked
-// using the exact same priority-or-date-specific rule lite mode wants
-// (poe_client.py's _build_regular_tasks), so "which tasks to auto-sync" is
-// just "whatever's already checked" -- no separate client-side filter
-// needed. List assignment uses settings.lite_mode_list_names directly
-// (same fixed 3-name scheme as the original's liteModeSync), not the full
-// list-override modal.
+// Simplified from the original: routing is fully resolved server-side at
+// extraction time now (list_table refactor) -- task_checked already
+// reflects the app's date-specific/confidently-routed default, and
+// task_list_name is already set wherever the AI/category-default could
+// determine it. No client-side list lookup needed here at all; any
+// genuinely unmatched task just surfaces via the sync API's existing
+// per-task "no list assigned" failure detail.
 async function runLiteModeSync() {
   var checkedTasks = state.tasks.filter(function(t) { return t.checked && t.title.trim(); });
   if (checkedTasks.length === 0) {
-    // No priority/date-specific tasks found -- fall back to full review,
-    // same as the original.
+    // Nothing defaulted to checked -- fall back to full review, same as
+    // the original.
     state.tasks.forEach(function(t) { t.checked = true; });
     updateStepper(2);
     showSection("review");
-    showToast("No priority or date-specific tasks found. Showing full review.", "info");
+    showToast("No date-specific or confidently-routed tasks found. Showing full review.", "info");
     renderPhotoDate();
     renderTasks();
     addTaskBtn.style.display = "";
@@ -513,15 +486,7 @@ async function runLiteModeSync() {
     (totalCount > 1 ? "s" : "") + "…", "success");
 
   try {
-    var settings = await apiFetch("/api/settings");
-    var liteNames = settings.lite_mode_list_names || {};
-    var listAssignments = {};
-    checkedTasks.forEach(function(t) {
-      if (t.listOverride) { return; } // explicit override already set on the task itself
-      var name = t.isEvent ? liteNames.event : (t.priority ? liteNames.priority : liteNames.other);
-      if (name) { listAssignments[t.id] = name; }
-    });
-    var result = await apiJson("POST", "/api/drafts/" + state.draftId + "/sync", { list_assignments: listAssignments });
+    var result = await apiJson("POST", "/api/drafts/" + state.draftId + "/sync", {});
     applyDraftResponse(result.draft);
     showSyncResult(result.results);
   } catch (err) {
@@ -548,7 +513,7 @@ function renderPhotoDate() {
 function renderTaskCard(task, idx, animIdx) {
   var card = document.createElement("div");
   var cls = "task-card";
-  if (task.priority) { cls += " priority-task"; }
+  if (!task.listName) { cls += " priority-task"; } // reuse the accent styling to flag "needs a list"
   if (!task.checked) { cls += " unchecked-task"; }
   card.className = cls;
   card.style.animationDelay = (animIdx * 0.06) + "s";
@@ -558,8 +523,8 @@ function renderTaskCard(task, idx, animIdx) {
   var checkedAttr = task.checked ? " checked" : "";
 
   var listBadgeHtml = "";
-  if (task.listOverride) {
-    listBadgeHtml = '<div style="margin-top:4px;"><span style="display:inline-block;font-size:11px;padding:2px 8px;border-radius:10px;background:var(--accent-light);color:var(--accent);font-weight:600;"><i class="fas fa-list" style="margin-right:4px;"></i>' + escapeHtml(task.listOverride) + '</span></div>';
+  if (task.listName) {
+    listBadgeHtml = '<div style="margin-top:4px;"><span style="display:inline-block;font-size:11px;padding:2px 8px;border-radius:10px;background:var(--accent-light);color:var(--accent);font-weight:600;"><i class="fas fa-list" style="margin-right:4px;"></i>' + escapeHtml(task.listName) + '</span></div>';
   }
 
   card.innerHTML =
@@ -594,52 +559,39 @@ function renderTasks() {
     return;
   }
 
-  var priorityItems = [];
-  var otherItems = [];
-  var eventItems = [];
+  // Dynamic grouping by resolved list name (list_table refactor) -- no
+  // more fixed priority/other/event buckets. Tasks with no list yet
+  // (listName null -- unmatched) group under "Unmatched", sorted last so
+  // it reads as "needs your attention" rather than leading the list.
+  var groups = {};
+  var order = [];
   state.tasks.forEach(function(task) {
-    if (task.isEvent) { eventItems.push(task); }
-    else if (task.priority) { priorityItems.push(task); }
-    else { otherItems.push(task); }
+    var key = task.listName || "";
+    if (!groups[key]) { groups[key] = []; order.push(key); }
+    groups[key].push(task);
+  });
+  order.sort(function(a, b) {
+    if (a === "" && b !== "") { return 1; }
+    if (b === "" && a !== "") { return -1; }
+    return a.localeCompare(b);
   });
 
   var animIdx = 0;
-
-  if (eventItems.length > 0) {
-    var eventLabel = document.createElement("div");
-    eventLabel.className = "task-section-label priority";
-    eventLabel.innerHTML = '<i class="fas fa-ticket"></i> Event Registration (' + eventItems.length + ')';
-    taskList.appendChild(eventLabel);
-    eventItems.forEach(function(t) { taskList.appendChild(renderTaskCard(t, null, animIdx++)); });
-  }
-
-  if (eventItems.length > 0 && (priorityItems.length > 0 || otherItems.length > 0)) {
-    var divE = document.createElement("div");
-    divE.className = "task-section-divider";
-    taskList.appendChild(divE);
-  }
-
-  if (priorityItems.length > 0) {
-    var priLabel = document.createElement("div");
-    priLabel.className = "task-section-label priority";
-    priLabel.innerHTML = '<i class="fas fa-fire"></i> Quizzes, Exams &amp; Dictations (' + priorityItems.length + ')';
-    taskList.appendChild(priLabel);
-    priorityItems.forEach(function(t) { taskList.appendChild(renderTaskCard(t, null, animIdx++)); });
-  }
-
-  if (priorityItems.length > 0 && otherItems.length > 0) {
-    var divider = document.createElement("div");
-    divider.className = "task-section-divider";
-    taskList.appendChild(divider);
-  }
-
-  if (otherItems.length > 0) {
-    var otherLabel = document.createElement("div");
-    otherLabel.className = "task-section-label";
-    otherLabel.innerHTML = '<i class="fas fa-list-check"></i> Other Tasks (' + otherItems.length + ')';
-    taskList.appendChild(otherLabel);
-    otherItems.forEach(function(t) { taskList.appendChild(renderTaskCard(t, null, animIdx++)); });
-  }
+  order.forEach(function(key, i) {
+    var tasks = groups[key];
+    var label = document.createElement("div");
+    label.className = key === "" ? "task-section-label priority" : "task-section-label";
+    var icon = key === "" ? "fa-triangle-exclamation" : "fa-list-check";
+    var title = key === "" ? "Unmatched — needs a list" : escapeHtml(key);
+    label.innerHTML = '<i class="fas ' + icon + '"></i> ' + title + " (" + tasks.length + ")";
+    taskList.appendChild(label);
+    tasks.forEach(function(t) { taskList.appendChild(renderTaskCard(t, null, animIdx++)); });
+    if (i < order.length - 1) {
+      var divider = document.createElement("div");
+      divider.className = "task-section-divider";
+      taskList.appendChild(divider);
+    }
+  });
 
   // Bind checkbox events -- immediate persist, no debounce (discrete event)
   taskList.querySelectorAll(".task-check").forEach(function(cb) {
@@ -657,9 +609,9 @@ function renderTasks() {
     });
   });
 
-  // Bind text inputs -- local update on every keystroke, persist + priority
-  // recompute on blur (matches the original's "re-render on blur if
-  // priority changed" pattern, now also persisting to the server).
+  // Bind text inputs -- local update on every keystroke, persist on blur.
+  // Editing text no longer recomputes/re-groups anything client-side --
+  // list routing only happens once, server-side, at extraction time.
   taskList.querySelectorAll(".task-title-input, .task-body-input").forEach(function(el) {
     el.addEventListener("input", function() {
       var task = findTask(this.getAttribute("data-id"));
@@ -670,11 +622,7 @@ function renderTasks() {
     el.addEventListener("blur", function() {
       var task = findTask(this.getAttribute("data-id"));
       if (!task) { return; }
-      var newPri = isPriorityTask(task.title, task.body);
-      var priorityChanged = newPri !== task.priority;
-      task.priority = newPri;
-      apiPatchTaskSafe(task.id, { title: task.title, body: task.body, priority: task.priority });
-      if (priorityChanged) { renderTasks(); }
+      apiPatchTaskSafe(task.id, { title: task.title, body: task.body });
     });
   });
 
@@ -769,22 +717,15 @@ backToUploadBtn.addEventListener("click", function() {
 });
 
 // ========== LIST MODAL ==========
-function matchListOverride(overrideName, lists) {
-  if (!overrideName) { return null; }
-  var lower = overrideName.toLowerCase();
-  for (var i = 0; i < lists.length; i++) {
-    if (lists[i].displayName.toLowerCase() === lower) { return lists[i]; }
-  }
-  return null;
-}
-
-function capitalizeFirstLetter(str) {
-  if (!str) { return str; }
-  return str.replace(/\b\w/g, function(c) { return c.toUpperCase(); });
-}
-
-var modalCustomData = []; // { key, matchedListName, taskCount, selectEl }
-var modalUnmatchedData = []; // { key, rawName, suggestedName, taskCount, selectEl, inputEl }
+// Fully dynamic (list_table refactor): one section per list the server
+// already resolved (with a "change" select, pre-selected to that list --
+// only sent back to the server if actually changed), plus one required
+// section for anything the AI couldn't confidently route.
+var modalResolvedGroups = {}; // listName -> tasks[]
+var modalUnmatchedTasks = []; // tasks[]
+var modalResolvedData = []; // { listName, tasks, selectEl }
+var modalUnmatchedSelect = null;
+var modalUnmatchedInput = null;
 var currentLists = [];
 
 function truncateTitle(title, maxLen) {
@@ -801,74 +742,21 @@ function buildModalTaskListHtml(tasks) {
   return html;
 }
 
-function buildUncheckedNoteHtml(filterFn) {
-  var unchecked = state.tasks.filter(function(t) {
-    return !t.checked && !t.synced && t.title.trim() && filterFn(t);
-  });
-  if (unchecked.length === 0) { return ""; }
-  return '<div class="modal-unchecked-note">' + unchecked.length + ' unchecked task' + (unchecked.length > 1 ? 's' : '') + ' excluded</div>';
-}
-
-function injectTaskListIntoSection(sectionEl, tasks, filterFn) {
-  var oldList = sectionEl.querySelector(".modal-task-list");
-  if (oldList) { oldList.remove(); }
-  var oldNote = sectionEl.querySelector(".modal-unchecked-note");
-  if (oldNote) { oldNote.remove(); }
-  var labelDiv = sectionEl.querySelector("div");
-  if (labelDiv) {
-    labelDiv.insertAdjacentHTML("afterend", buildUncheckedNoteHtml(filterFn) + buildModalTaskListHtml(tasks));
-  }
-}
-
-var modalOverrideGroups = {};
-
 function openListModal() {
   var checkedTasks = state.tasks.filter(function(t) { return t.checked && !t.synced && t.title.trim(); });
 
-  var checkedPriority = checkedTasks.filter(function(t) { return !t.listOverride && t.priority && !t.isEvent; });
-  var checkedOther = checkedTasks.filter(function(t) { return !t.listOverride && !t.priority && !t.isEvent; });
-  var checkedEvent = checkedTasks.filter(function(t) { return !t.listOverride && t.isEvent; });
-
-  var overrideTasks = checkedTasks.filter(function(t) { return !!t.listOverride; });
-  var overrideGroups = {};
-  overrideTasks.forEach(function(t) {
-    var key = t.listOverride.toLowerCase().trim();
-    if (!overrideGroups[key]) { overrideGroups[key] = { rawName: t.listOverride, tasks: [] }; }
-    overrideGroups[key].tasks.push(t);
+  var resolvedGroups = {};
+  var unmatchedTasks = [];
+  checkedTasks.forEach(function(t) {
+    if (t.listName) {
+      if (!resolvedGroups[t.listName]) { resolvedGroups[t.listName] = []; }
+      resolvedGroups[t.listName].push(t);
+    } else {
+      unmatchedTasks.push(t);
+    }
   });
-  modalOverrideGroups = overrideGroups;
-
-  if (checkedPriority.length > 0) {
-    modalPrioritySection.style.display = "";
-    modalPriorityLabel.textContent = "Priority (" + checkedPriority.length + ")";
-    newListInputPriority.value = "";
-    injectTaskListIntoSection(modalPrioritySection, checkedPriority, function(t) { return !t.listOverride && t.priority && !t.isEvent; });
-  } else {
-    modalPrioritySection.style.display = "none";
-  }
-
-  if (checkedOther.length > 0) {
-    modalOtherSection.style.display = "";
-    modalOtherLabel.textContent = "Other tasks (" + checkedOther.length + ")";
-    newListInputOther.value = "";
-    injectTaskListIntoSection(modalOtherSection, checkedOther, function(t) { return !t.listOverride && !t.priority && !t.isEvent; });
-  } else {
-    modalOtherSection.style.display = "none";
-  }
-
-  if (checkedEvent.length > 0) {
-    modalEventSection.style.display = "";
-    modalEventLabel.textContent = "Event registration (" + checkedEvent.length + ")";
-    newListInputEvent.value = "";
-    injectTaskListIntoSection(modalEventSection, checkedEvent, function(t) { return !t.listOverride && t.isEvent; });
-  } else {
-    modalEventSection.style.display = "none";
-  }
-
-  $id("modalCustomSections").innerHTML = "";
-  $id("modalUnmatchedSections").innerHTML = "";
-  modalCustomData = [];
-  modalUnmatchedData = [];
+  modalResolvedGroups = resolvedGroups;
+  modalUnmatchedTasks = unmatchedTasks;
 
   var allUnchecked = state.tasks.filter(function(t) { return !t.checked && !t.synced && t.title.trim(); });
   var uncheckedNoteEl = $id("modalUncheckedNote");
@@ -899,89 +787,72 @@ function populateListSelect(selectEl, lists, defaultName) {
 }
 
 async function fetchTaskLists() {
-  var loadingHtml = '<option value="">Loading…</option>';
-  listSelectPriority.innerHTML = loadingHtml;
-  listSelectOther.innerHTML = loadingHtml;
-  listSelectEvent.innerHTML = loadingHtml;
-
+  $id("modalCustomSections").innerHTML = '<p style="font-size:13px; color:var(--text-secondary);">Loading lists…</p>';
+  $id("modalUnmatchedSections").innerHTML = "";
   try {
-    var settings = await apiFetch("/api/settings");
-    var liteNames = settings.lite_mode_list_names || {};
     currentLists = await apiFetch("/api/lists");
-    populateListSelect(listSelectPriority, currentLists, settings.default_list_name_priority || liteNames.priority);
-    populateListSelect(listSelectOther, currentLists, settings.default_list_name_other || liteNames.other);
-    populateListSelect(listSelectEvent, currentLists, settings.default_list_name_event || liteNames.event);
-    buildOverrideSections(currentLists);
+    buildModalSections(currentLists);
   } catch (err) {
-    var errHtml = err.isAuthError
-      ? '<option value="">Not connected — see banner above</option>'
-      : '<option value="">Error loading lists</option>';
-    listSelectPriority.innerHTML = errHtml;
-    listSelectOther.innerHTML = errHtml;
-    listSelectEvent.innerHTML = errHtml;
+    var msg = err.isAuthError ? "Not connected — see banner above" : ("Could not load task lists: " + err.message);
+    $id("modalCustomSections").innerHTML = '<p style="font-size:13px; color:var(--danger);">' + escapeHtml(msg) + "</p>";
     showToast("Could not load task lists: " + err.message, "error");
   }
 }
 
-function buildOverrideSections(lists) {
+function buildModalSections(lists) {
   var customContainer = $id("modalCustomSections");
   var unmatchedContainer = $id("modalUnmatchedSections");
   customContainer.innerHTML = "";
   unmatchedContainer.innerHTML = "";
-  modalCustomData = [];
-  modalUnmatchedData = [];
+  modalResolvedData = [];
+  modalUnmatchedSelect = null;
+  modalUnmatchedInput = null;
 
-  Object.keys(modalOverrideGroups).forEach(function(key) {
-    var group = modalOverrideGroups[key];
-    var matched = matchListOverride(group.rawName, lists);
-    var taskCount = group.tasks.length;
-
-    if (matched) {
-      var section = document.createElement("div");
-      section.className = "modal-custom-section";
-      section.innerHTML =
-        '<div class="modal-custom-label">' +
-          '<i class="fas fa-thumbtack" style="color:var(--accent);"></i>' +
-          '<span class="custom-matched">Custom list: ' + escapeHtml(matched.displayName) + ' (' + taskCount + ')</span>' +
-        '</div>' +
-        buildModalTaskListHtml(group.tasks) +
-        '<div class="field" style="margin-bottom:8px;"><select class="custom-list-select"></select></div>';
-      customContainer.appendChild(section);
-      var selectEl = section.querySelector(".custom-list-select");
-      populateListSelect(selectEl, lists, matched.displayName);
-      modalCustomData.push({ key: key, matchedListName: matched.displayName, taskCount: taskCount, selectEl: selectEl });
-    } else {
-      var suggestedName = capitalizeFirstLetter(group.rawName.trim());
-      var section2 = document.createElement("div");
-      section2.className = "modal-custom-section";
-      section2.innerHTML =
-        '<div class="modal-custom-label">' +
-          '<i class="fas fa-triangle-exclamation" style="color:var(--danger);"></i>' +
-          '<span class="custom-unmatched">No matching list found (' + taskCount + ')</span>' +
-        '</div>' +
-        buildModalTaskListHtml(group.tasks) +
-        '<div class="modal-unmatched-hint">The specified list "' + escapeHtml(group.rawName) + '" was not found. You can create it or pick an existing list.</div>' +
-        '<div class="field" style="margin-bottom:8px;"><select class="unmatched-list-select"><option value="__create__">Create new list</option></select></div>' +
-        '<div class="field" style="margin-bottom:16px;"><input type="text" class="modal-new-list-input" value="' + escapeAttr(suggestedName) + '" placeholder="New list name"></div>';
-      unmatchedContainer.appendChild(section2);
-      var selectEl2 = section2.querySelector(".unmatched-list-select");
-      var inputEl = section2.querySelector(".modal-new-list-input");
-      lists.forEach(function(list) {
-        var opt = document.createElement("option");
-        opt.value = list.displayName;
-        opt.textContent = list.displayName;
-        selectEl2.appendChild(opt);
-      });
-      selectEl2.addEventListener("change", function() {
-        if (selectEl2.value === "__create__") { inputEl.disabled = false; inputEl.style.opacity = ""; }
-        else { inputEl.disabled = true; }
-      });
-      modalUnmatchedData.push({
-        key: key, rawName: group.rawName, suggestedName: suggestedName,
-        taskCount: taskCount, selectEl: selectEl2, inputEl: inputEl,
-      });
-    }
+  Object.keys(modalResolvedGroups).sort().forEach(function(listName) {
+    var tasks = modalResolvedGroups[listName];
+    var section = document.createElement("div");
+    section.className = "modal-custom-section";
+    section.innerHTML =
+      '<div class="modal-custom-label">' +
+        '<i class="fas fa-list" style="color:var(--accent);"></i>' +
+        '<span class="custom-matched">' + escapeHtml(listName) + " (" + tasks.length + ")</span>" +
+      "</div>" +
+      buildModalTaskListHtml(tasks) +
+      '<div class="field" style="margin-bottom:8px;"><select class="custom-list-select"></select></div>';
+    customContainer.appendChild(section);
+    var selectEl = section.querySelector(".custom-list-select");
+    populateListSelect(selectEl, lists, listName);
+    modalResolvedData.push({ listName: listName, tasks: tasks, selectEl: selectEl });
   });
+
+  if (modalUnmatchedTasks.length > 0) {
+    var section2 = document.createElement("div");
+    section2.className = "modal-custom-section";
+    section2.innerHTML =
+      '<div class="modal-custom-label">' +
+        '<i class="fas fa-triangle-exclamation" style="color:var(--danger);"></i>' +
+        '<span class="custom-unmatched">Unmatched — pick a list (' + modalUnmatchedTasks.length + ")</span>" +
+      "</div>" +
+      buildModalTaskListHtml(modalUnmatchedTasks) +
+      '<div class="modal-unmatched-hint">These tasks weren\'t confidently routed to a list. Pick an existing one or create a new list.</div>' +
+      '<div class="field" style="margin-bottom:8px;"><select class="unmatched-list-select"><option value="__create__">Create new list</option></select></div>' +
+      '<div class="field" style="margin-bottom:16px;"><input type="text" class="modal-new-list-input" placeholder="New list name"></div>';
+    unmatchedContainer.appendChild(section2);
+    var selectEl2 = section2.querySelector(".unmatched-list-select");
+    var inputEl = section2.querySelector(".modal-new-list-input");
+    lists.forEach(function(list) {
+      var opt = document.createElement("option");
+      opt.value = list.displayName;
+      opt.textContent = list.displayName;
+      selectEl2.appendChild(opt);
+    });
+    selectEl2.addEventListener("change", function() {
+      if (selectEl2.value === "__create__") { inputEl.disabled = false; inputEl.style.opacity = ""; }
+      else { inputEl.disabled = true; inputEl.style.opacity = "0.5"; }
+    });
+    modalUnmatchedSelect = selectEl2;
+    modalUnmatchedInput = inputEl;
+  }
 }
 
 // ========== SYNC FLOW ==========
@@ -995,60 +866,27 @@ syncBtn.addEventListener("click", function() {
 });
 
 listModalConfirm.addEventListener("click", function() {
-  var hasPriority = modalPrioritySection.style.display !== "none";
-  var hasOther = modalOtherSection.style.display !== "none";
-  var hasEvent = modalEventSection.style.display !== "none";
-
-  if (hasPriority && !listSelectPriority.value && !newListInputPriority.value.trim()) {
-    showToast("Please select or create a list for priority tasks", "error"); return;
-  }
-  if (hasOther && !listSelectOther.value && !newListInputOther.value.trim()) {
-    showToast("Please select or create a list for other tasks", "error"); return;
-  }
-  if (hasEvent && !listSelectEvent.value && !newListInputEvent.value.trim()) {
-    showToast("Please select or create a list for event tasks", "error"); return;
-  }
-  for (var u = 0; u < modalUnmatchedData.length; u++) {
-    var um = modalUnmatchedData[u];
-    if (um.selectEl.value === "__create__" && !um.inputEl.value.trim()) {
-      showToast("Please enter a name for the new list", "error"); return;
-    }
+  if (modalUnmatchedSelect && modalUnmatchedSelect.value === "__create__" && !modalUnmatchedInput.value.trim()) {
+    showToast("Please enter a name for the new list", "error");
+    return;
   }
 
   closeListModal();
 
-  // Build task_id -> list name assignments -- the server resolves/creates
-  // by name itself (graph_client.find_or_create_list), so unlike the
-  // original there's no separate client-side "resolve list ID" step.
+  // Build task_id -> list name assignments -- only for tasks the user
+  // actually changed away from the server-resolved list, plus every
+  // unmatched task (required). Anything left alone syncs using whatever
+  // task_list_name is already stored on it -- no assignment needed.
   var listAssignments = {};
-
-  var checkedPriority = state.tasks.filter(function(t) { return t.checked && !t.synced && t.title.trim() && !t.listOverride && t.priority && !t.isEvent; });
-  var checkedOther = state.tasks.filter(function(t) { return t.checked && !t.synced && t.title.trim() && !t.listOverride && !t.priority && !t.isEvent; });
-  var checkedEvent = state.tasks.filter(function(t) { return t.checked && !t.synced && t.title.trim() && !t.listOverride && t.isEvent; });
-
-  if (hasPriority) {
-    var priName = newListInputPriority.value.trim() || listSelectPriority.value;
-    checkedPriority.forEach(function(t) { listAssignments[t.id] = priName; });
-  }
-  if (hasOther) {
-    var otherName = newListInputOther.value.trim() || listSelectOther.value;
-    checkedOther.forEach(function(t) { listAssignments[t.id] = otherName; });
-  }
-  if (hasEvent) {
-    var eventName = newListInputEvent.value.trim() || listSelectEvent.value;
-    checkedEvent.forEach(function(t) { listAssignments[t.id] = eventName; });
-  }
-  modalCustomData.forEach(function(cd) {
-    var group = modalOverrideGroups[cd.key];
-    if (!group) { return; }
-    group.tasks.forEach(function(t) { listAssignments[t.id] = cd.selectEl.value; });
+  modalResolvedData.forEach(function(rd) {
+    if (rd.selectEl.value !== rd.listName) {
+      rd.tasks.forEach(function(t) { listAssignments[t.id] = rd.selectEl.value; });
+    }
   });
-  modalUnmatchedData.forEach(function(umd) {
-    var group = modalOverrideGroups[umd.key];
-    if (!group) { return; }
-    var name = umd.selectEl.value === "__create__" ? umd.inputEl.value.trim() : umd.selectEl.value;
-    group.tasks.forEach(function(t) { listAssignments[t.id] = name; });
-  });
+  if (modalUnmatchedTasks.length > 0) {
+    var name = modalUnmatchedSelect.value === "__create__" ? modalUnmatchedInput.value.trim() : modalUnmatchedSelect.value;
+    modalUnmatchedTasks.forEach(function(t) { listAssignments[t.id] = name; });
+  }
 
   updateStepper(3);
   showSection("sync");
@@ -1159,11 +997,6 @@ function populateTimezoneSelect() {
   populateTimezoneSelect();
   updateStepper(1);
   showSection("upload");
-
-  try {
-    var settings = await apiFetch("/api/settings");
-    priorityKeywords = settings.priority_keywords || [];
-  } catch (ignored) { /* keep UI usable even if settings can't be read */ }
 
   try {
     var config = await apiFetch("/api/config");

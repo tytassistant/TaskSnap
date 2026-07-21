@@ -1,7 +1,8 @@
 // Settings page (decision 6's editable extraction rules + MS account
-// connect/disconnect status). Same apiFetch pattern as the wizard's
-// app.js -- not shared as a common module since neither file is large
-// enough yet to justify the indirection.
+// connect/disconnect status + list_table refactor's Manage Lists panel).
+// Same apiFetch pattern as the wizard's app.js -- not shared as a common
+// module since neither file is large enough yet to justify the
+// indirection.
 
 function $id(id) { return document.getElementById(id); }
 
@@ -36,8 +37,9 @@ function showToast(msg, type) {
 }
 
 // ---------------------------------------------------------------------------
-// List <-> textarea helpers (priority_keywords / list_override_rules are
-// JSON string arrays server-side; edited here as one-per-line text)
+// List <-> textarea helpers (list_override_rules / list_alt_names /
+// list_category / list_keywords are JSON string arrays server-side;
+// edited here as one-per-line text)
 // ---------------------------------------------------------------------------
 
 function linesToList(text) {
@@ -68,21 +70,167 @@ function populateTimezoneSelect(selected) {
 }
 
 // ---------------------------------------------------------------------------
+// Default category select -- populated from the distinct category tags
+// actually used across list_table, so this can't drift from what's
+// configured (typo-proof, unlike a free-text field).
+// ---------------------------------------------------------------------------
+
+function populateCategorySelect(selected, listEntries) {
+  var select = $id("defaultCategory");
+  var categories = new Set();
+  (listEntries || []).forEach(function(entry) {
+    (entry.list_category || []).forEach(function(c) { categories.add(c); });
+  });
+  if (selected) { categories.add(selected); }
+  var sorted = Array.from(categories).sort();
+  select.innerHTML = "";
+  if (sorted.length === 0) {
+    var opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "(no categories configured yet)";
+    select.appendChild(opt);
+    return;
+  }
+  sorted.forEach(function(cat) {
+    var opt = document.createElement("option");
+    opt.value = cat;
+    opt.textContent = cat;
+    if (cat === selected) { opt.selected = true; }
+    select.appendChild(opt);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Manage lists panel
+// ---------------------------------------------------------------------------
+
+var _msListNames = [];
+
+function populateMsListsDatalist(msLists) {
+  var datalist = $id("msListsDatalist");
+  datalist.innerHTML = "";
+  msLists.forEach(function(lst) {
+    var opt = document.createElement("option");
+    opt.value = lst.displayName;
+    datalist.appendChild(opt);
+  });
+}
+
+function createListEntryRow(entry) {
+  // entry.list_id is null for a not-yet-created blank row.
+  var row = document.createElement("div");
+  row.className = "list-entry-row";
+  row.innerHTML =
+    '<div class="field">' +
+      '<label>List name</label>' +
+      '<input type="text" class="le-name" list="msListsDatalist" placeholder="e.g. Household Tasks">' +
+    '</div>' +
+    '<div class="field">' +
+      '<label>Alt names <span style="font-weight:400;">(one per line, optional)</span></label>' +
+      '<textarea class="le-alt" rows="2" placeholder="household"></textarea>' +
+    '</div>' +
+    '<div class="field">' +
+      '<label>Category <span style="font-weight:400;">(one per line)</span></label>' +
+      '<textarea class="le-category" rows="2" placeholder="Theo"></textarea>' +
+    '</div>' +
+    '<div class="field">' +
+      '<label>Keywords <span style="font-weight:400;">(one per line, optional)</span></label>' +
+      '<textarea class="le-keywords" rows="3" placeholder="quiz&#10;exam"></textarea>' +
+    '</div>' +
+    '<label style="display:flex; align-items:center; gap:8px; font-size:14px; margin-bottom:12px;">' +
+      '<input type="checkbox" class="le-default" style="width:16px; height:16px;"> Default list for this category' +
+    '</label>' +
+    '<div class="list-entry-actions">' +
+      '<button type="button" class="btn btn-primary btn-sm le-save">' +
+        (entry.list_id ? "Save" : "Create") +
+      '</button>' +
+      (entry.list_id ? '<button type="button" class="btn btn-outline btn-sm le-delete">Delete</button>' : '') +
+    '</div>';
+
+  row.querySelector(".le-name").value = entry.list_name || "";
+  row.querySelector(".le-alt").value = listToLines(entry.list_alt_names);
+  row.querySelector(".le-category").value = listToLines(entry.list_category);
+  row.querySelector(".le-keywords").value = listToLines(entry.list_keywords);
+  row.querySelector(".le-default").checked = !!entry.list_is_category_default;
+
+  row.querySelector(".le-save").addEventListener("click", function() {
+    var payload = {
+      list_name: row.querySelector(".le-name").value.trim(),
+      list_alt_names: linesToList(row.querySelector(".le-alt").value),
+      list_category: linesToList(row.querySelector(".le-category").value),
+      list_keywords: linesToList(row.querySelector(".le-keywords").value),
+      list_is_category_default: row.querySelector(".le-default").checked,
+    };
+    if (!payload.list_name) {
+      showToast("List name is required", "error");
+      return;
+    }
+    var request = entry.list_id
+      ? apiFetch("/api/list-entries/" + entry.list_id, {
+          method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+        })
+      : apiFetch("/api/list-entries", {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+        });
+    request
+      .then(function() {
+        showToast(entry.list_id ? "List saved" : "List created", "success");
+        return loadListEntries();
+      })
+      .catch(function(err) { showToast("Could not save list: " + err.message, "error"); });
+  });
+
+  var deleteBtn = row.querySelector(".le-delete");
+  if (deleteBtn) {
+    deleteBtn.addEventListener("click", function() {
+      apiFetch("/api/list-entries/" + entry.list_id, { method: "DELETE" })
+        .then(function() {
+          showToast("List removed", "success");
+          return loadListEntries();
+        })
+        .catch(function(err) { showToast("Could not delete list: " + err.message, "error"); });
+    });
+  }
+
+  return row;
+}
+
+var _pendingNewRow = false;
+// Tracks the server's last-known default_category (updated on initial
+// load and on a successful Settings save) -- used to seed the select the
+// very first time, without clobbering an in-progress (unsaved) selection
+// on later refreshes triggered by editing/deleting a list row.
+var _lastKnownDefaultCategory = null;
+
+async function loadListEntries() {
+  var listEntries = await apiFetch("/api/list-entries");
+  var container = $id("listEntriesContainer");
+  container.innerHTML = "";
+  listEntries.forEach(function(entry) { container.appendChild(createListEntryRow(entry)); });
+  if (_pendingNewRow) {
+    container.appendChild(createListEntryRow({ list_id: null }));
+  }
+  var categorySelect = $id("defaultCategory");
+  var currentSelection = categorySelect.options.length > 0 ? categorySelect.value : _lastKnownDefaultCategory;
+  populateCategorySelect(currentSelection, listEntries);
+  return listEntries;
+}
+
+$id("addListEntryBtn").addEventListener("click", function() {
+  _pendingNewRow = true;
+  $id("listEntriesContainer").appendChild(createListEntryRow({ list_id: null }));
+});
+
+// ---------------------------------------------------------------------------
 // Load
 // ---------------------------------------------------------------------------
 
 async function loadSettings() {
   var settings = await apiFetch("/api/settings");
-  $id("priorityKeywords").value = listToLines(settings.priority_keywords);
   $id("listOverrideRules").value = listToLines(settings.list_override_rules);
   populateTimezoneSelect(settings.default_timezone);
-  $id("defaultListPriority").value = settings.default_list_name_priority || "";
-  $id("defaultListOther").value = settings.default_list_name_other || "";
-  $id("defaultListEvent").value = settings.default_list_name_event || "";
-  var lite = settings.lite_mode_list_names || {};
-  $id("liteListPriority").value = lite.priority || "";
-  $id("liteListOther").value = lite.other || "";
-  $id("liteListEvent").value = lite.event || "";
+  _lastKnownDefaultCategory = settings.default_category || null;
+  return settings;
 }
 
 async function loadMsStatus() {
@@ -98,35 +246,34 @@ async function loadMsStatus() {
 }
 
 // ---------------------------------------------------------------------------
-// Save
+// Save (list_override_rules / default_timezone / default_category only --
+// Manage Lists rows save independently via their own Save/Create buttons)
 // ---------------------------------------------------------------------------
 
 $id("saveBtn").addEventListener("click", function() {
   var payload = {
-    priority_keywords: linesToList($id("priorityKeywords").value),
     list_override_rules: linesToList($id("listOverrideRules").value),
     default_timezone: $id("defaultTimezone").value,
-    default_list_name_priority: $id("defaultListPriority").value.trim() || null,
-    default_list_name_other: $id("defaultListOther").value.trim() || null,
-    default_list_name_event: $id("defaultListEvent").value.trim() || null,
-    lite_mode_list_names: {
-      priority: $id("liteListPriority").value.trim(),
-      other: $id("liteListOther").value.trim(),
-      event: $id("liteListEvent").value.trim(),
-    },
+    default_category: $id("defaultCategory").value,
   };
   apiFetch("/api/settings", {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   })
-    .then(function() { showToast("Settings saved", "success"); })
+    .then(function() {
+      _lastKnownDefaultCategory = payload.default_category;
+      showToast("Settings saved", "success");
+    })
     .catch(function(err) { showToast("Could not save settings: " + err.message, "error"); });
 });
 
 (async function init() {
   try {
     await loadSettings();
+    var msLists = await apiFetch("/api/lists");
+    populateMsListsDatalist(msLists);
+    await loadListEntries();
   } catch (err) {
     showToast("Could not load settings: " + err.message, "error");
   }

@@ -209,6 +209,18 @@ body {
   line-height: 1.6;
 }
 
+/* Manage lists panel (list_table refactor) */
+.list-entry-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 18px 16px 6px;
+  margin-bottom: 16px;
+  background: var(--bg-secondary);
+}
+.list-entry-actions {
+  display: flex; gap: 10px; margin-bottom: 16px;
+}
+
 /* Input Fields */
 .field { margin-bottom: 16px; }
 .field label {
