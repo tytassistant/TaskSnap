@@ -1,17 +1,51 @@
-{% extends "base.html" %}
-{% block title %}Sign in — TaskSnap{% endblock %}
-{% block body %}
-<div class="card">
-  <h1>TaskSnap</h1>
-  <form method="post" action="/login">
-    <label>Username
-      <input type="text" name="username" required autofocus>
-    </label>
-    <label>Password
-      <input type="password" name="password" required>
-    </label>
-    <button type="submit">Sign in</button>
-  </form>
-  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sign in — TaskSnap</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;500;600;700;800&family=Source+Serif+4:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="bg-pattern"></div>
+
+<div class="app-container" style="max-width:420px; margin-top:10vh;">
+
+  <div class="header" style="justify-content:center;">
+    <div class="header-logo">
+      <div class="header-logo-icon"><i class="fas fa-clipboard-list"></i></div>
+      <h1>TaskSnap</h1>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title" style="margin-bottom:16px;"><i class="fas fa-lock" style="margin-right:8px;"></i>Sign in</div>
+
+    {% if error %}
+    <div style="margin-bottom:14px; padding:10px 12px; border-radius:6px; border:1px solid var(--danger); color:var(--danger); font-size:13px;">
+      {{ error }}
+    </div>
+    {% endif %}
+
+    <form method="post" action="/login">
+      <div style="margin-bottom:12px;">
+        <label style="display:block; font-size:13px; margin-bottom:4px; color:var(--text-secondary);">Username</label>
+        <input type="text" name="username" required autofocus autocomplete="username"
+               style="width:100%; padding:8px 10px; border-radius:6px; border:1px solid var(--border-strong); background:var(--bg-card); color:var(--text-primary); font-family:'Bricolage Grotesque',sans-serif; font-size:14px;">
+      </div>
+      <div style="margin-bottom:18px;">
+        <label style="display:block; font-size:13px; margin-bottom:4px; color:var(--text-secondary);">Password</label>
+        <input type="password" name="password" required autocomplete="current-password"
+               style="width:100%; padding:8px 10px; border-radius:6px; border:1px solid var(--border-strong); background:var(--bg-card); color:var(--text-primary); font-family:'Bricolage Grotesque',sans-serif; font-size:14px;">
+      </div>
+      <button type="submit" class="btn btn-accent" style="width:100%;"><i class="fas fa-right-to-bracket"></i> Sign in</button>
+    </form>
+  </div>
+
 </div>
-{% endblock %}
+
+</body>
+</html>

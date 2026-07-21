@@ -56,6 +56,65 @@ function formatCreated(isoStr) {
   }
 }
 
+var draftViewModal = $id("draftViewModal");
+var draftViewBody = $id("draftViewBody");
+var draftViewClose = $id("draftViewClose");
+
+function closeDraftView() { draftViewModal.classList.remove("open"); }
+draftViewClose.addEventListener("click", closeDraftView);
+draftViewModal.addEventListener("click", function(e) { if (e.target === draftViewModal) { closeDraftView(); } });
+
+function renderDraftViewTask(task) {
+  var bits = [];
+  bits.push('<div style="font-size:14px; font-weight:600; color:var(--text-primary); margin-bottom:2px;">' +
+    '<i class="fas fa-' + (task.task_kind === "event" ? "calendar-day" : "square-check") + '" style="margin-right:6px; color:var(--text-tertiary);"></i>' +
+    escapeHtml(task.task_title) + '</div>');
+
+  var meta = [];
+  if (task.task_body) { meta.push(escapeHtml(task.task_body)); }
+  if (task.task_has_specific_due_date && task.task_due_datetime) {
+    meta.push('<i class="fas fa-clock" style="margin-right:4px;"></i>' + escapeHtml(formatCreated(task.task_due_datetime)));
+  }
+  if (task.task_list_name) {
+    meta.push('<i class="fas fa-list" style="margin-right:4px;"></i>' + escapeHtml(task.task_list_name));
+  }
+  if (meta.length > 0) {
+    bits.push('<div style="font-size:12px; color:var(--text-secondary); margin-bottom:4px; padding-left:20px;">' + meta.join(' &middot; ') + '</div>');
+  }
+
+  var statusText, statusColor;
+  if (!task.task_checked) {
+    statusText = "Not included"; statusColor = "var(--text-tertiary)";
+  } else if (task.task_synced) {
+    statusText = "Synced"; statusColor = "var(--success)";
+  } else {
+    statusText = "Not synced"; statusColor = "var(--danger)";
+  }
+  bits.push('<div style="font-size:11px; font-weight:700; color:' + statusColor + '; padding-left:20px; margin-bottom:12px;">' + statusText + '</div>');
+
+  return bits.join("");
+}
+
+async function openDraftView(draftId) {
+  draftViewBody.innerHTML = '<p style="font-size:13px; color:var(--text-secondary);">Loading...</p>';
+  draftViewModal.classList.add("open");
+  try {
+    var draft = await apiFetch("/api/drafts/" + draftId);
+    var html = "";
+    if (draft.draft_photo_data) {
+      html += '<img src="data:image/jpeg;base64,' + draft.draft_photo_data + '" alt="Draft photo" style="max-width:100%; border-radius:var(--radius-md); margin-bottom:16px;">';
+    }
+    if (!draft.tasks || draft.tasks.length === 0) {
+      html += '<p style="font-size:13px; color:var(--text-secondary);">No tasks in this draft.</p>';
+    } else {
+      html += draft.tasks.map(renderDraftViewTask).join("");
+    }
+    draftViewBody.innerHTML = html;
+  } catch (err) {
+    draftViewBody.innerHTML = '<p style="font-size:13px; color:var(--danger);">Could not load draft: ' + escapeHtml(err.message) + "</p>";
+  }
+}
+
 function renderDraftCard(draft) {
   var status = STATUS_LABELS[draft.draft_status] || STATUS_LABELS.open;
   var sourceLabel = SOURCE_LABELS[draft.draft_source] || draft.draft_source;
@@ -74,9 +133,14 @@ function renderDraftCard(draft) {
     '<div class="list-entry-actions">' +
       (draft.draft_status === "open"
         ? '<a class="btn btn-primary btn-sm draft-resume" href="/?draft=' + encodeURIComponent(draft.draft_id) + '"><i class="fas fa-arrow-rotate-right"></i> Resume</a>'
-        : "") +
+        : '<button type="button" class="btn btn-outline btn-sm draft-view"><i class="fas fa-eye"></i> View</button>') +
       '<button type="button" class="btn btn-outline btn-sm draft-delete"><i class="fas fa-trash-can"></i> Delete</button>' +
     '</div>';
+
+  var viewBtn = card.querySelector(".draft-view");
+  if (viewBtn) {
+    viewBtn.addEventListener("click", function() { openDraftView(draft.draft_id); });
+  }
 
   card.querySelector(".draft-delete").addEventListener("click", function() {
     if (!window.confirm("Delete this draft" + (draft.task_count > 0 ? " and its " + draft.task_count + " task" + (draft.task_count !== 1 ? "s" : "") : "") + "? This can't be undone.")) {

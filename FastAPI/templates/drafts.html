@@ -29,7 +29,7 @@
   </nav>
 
   <div class="card">
-    <div class="card-title">My Drafts</div>
+    <div class="card-title">Draft</div>
     <div class="card-desc">
       Every extraction that hasn't fully synced (or that you left mid-review) stays here — resume it
       to pick up where you left off, or delete it if you don't need it anymore.
@@ -40,6 +40,17 @@
 </div>
 
 <div class="toast-container" id="toastContainer"></div>
+
+<!-- Read-only draft view modal -->
+<div class="modal-overlay" id="draftViewModal">
+  <div class="modal-box">
+    <h3><i class="fas fa-eye"></i> Draft contents</h3>
+    <div id="draftViewBody"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline btn-sm" id="draftViewClose" type="button">Close</button>
+    </div>
+  </div>
+</div>
 
 <script src="/static/drafts.js"></script>
 </body>
