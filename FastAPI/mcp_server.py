@@ -367,7 +367,7 @@ def extract_tasks(
     default_timezone (see get_settings)."""
     if not image_b64 and not (text or "").strip():
         raise RuntimeError("Provide an image, text, or both.")
-    data = {}
+    data = {"created_via": "mcp"}
     if text is not None:
         data["text"] = text
     if timezone is not None:

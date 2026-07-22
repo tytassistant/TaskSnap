@@ -13,7 +13,7 @@ import re
 import sqlite3
 import threading
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 import requests
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
@@ -88,6 +88,7 @@ async def extract_route(
     image: Optional[UploadFile] = File(None),
     text: Optional[str] = Form(None),
     timezone: Optional[str] = Form(None),
+    created_via: Literal["web", "mcp"] = Form("web"),
     conn: sqlite3.Connection = Depends(get_db),
 ):
     """multipart (image?) + text? + timezone -> Poe extraction (settings-
@@ -99,7 +100,11 @@ async def extract_route(
     prompt. The AI resolves categoryIdentified/listIdentified itself;
     list_matcher.resolve_list then applies the small deterministic
     fallback (category default list, or unmatched for manual assignment
-    in the review UI)."""
+    in the review UI).
+
+    created_via defaults to 'web' (the GUI's own capture page never sends
+    this field); mcp_server.py's extract_tasks tool explicitly sends
+    'mcp' so draft_created_via reflects who actually created the draft."""
     settings = crud.get_settings(conn)
     tz = timezone or settings["default_timezone"]
     list_entries = crud.list_all_list_entries(conn)
@@ -123,7 +128,7 @@ async def extract_route(
     else:
         source = "text"
 
-    draft_id = crud.create_draft(conn, source=source, photo_data=photo_data_b64, created_via="web")
+    draft_id = crud.create_draft(conn, source=source, photo_data=photo_data_b64, created_via=created_via)
     for t in result["tasks"]:
         matched = list_matcher.resolve_list(t["category_identified"], t["list_identified"], list_entries)
         crud.add_draft_task(
