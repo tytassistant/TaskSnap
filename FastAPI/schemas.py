@@ -139,6 +139,19 @@ class DraftSyncRequest(_StrictModel):
     list_assignments: Optional[dict[str, str]] = None
 
 
+class DraftNewListCreate(_StrictModel):
+    """Body of POST /api/drafts/{draft_id}/new-lists -- registers intent to
+    create list_name as a brand-new real Microsoft To Do list (with this
+    routing config) the next time this draft is synced. Nothing touches
+    Graph here; sync_draft is what actually creates it, gated by the same
+    conversational go-ahead rule as the rest of that call (decision 3)."""
+    list_name: str
+    list_alt_names: list[str] = []
+    list_category: list[str] = []
+    list_keywords: list[str] = []
+    list_is_category_default: bool = False
+
+
 # ---------------------------------------------------------------------------
 # MS To Do lists
 # ---------------------------------------------------------------------------

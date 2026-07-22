@@ -114,6 +114,25 @@ TABLE_DDL = [
         task_last_modified_datetime_UTC TEXT NOT NULL
     )
     """,
+    # Registers intent to create a brand-new real Microsoft To Do list (with
+    # its list_table routing config) at the moment this draft syncs --
+    # decision 3's low-blast-radius/conversational-go-ahead gating, same as
+    # draft tasks: nothing touches Graph until sync_draft actually runs.
+    # Row is deleted once sync_draft has created the real list (see
+    # sync_draft_route), so a re-run of sync on the same draft never
+    # double-creates it.
+    """
+    CREATE TABLE IF NOT EXISTS draft_new_list_table (
+        new_list_id TEXT PRIMARY KEY,
+        draft_id TEXT NOT NULL REFERENCES draft_table(draft_id),
+        list_name TEXT NOT NULL,
+        list_alt_names TEXT NOT NULL DEFAULT '[]',
+        list_category TEXT NOT NULL DEFAULT '[]',
+        list_keywords TEXT NOT NULL DEFAULT '[]',
+        list_is_category_default INTEGER NOT NULL DEFAULT 0 CHECK (list_is_category_default IN (0, 1)),
+        new_list_create_datetime_UTC TEXT NOT NULL
+    )
+    """,
     # Identical shape to portfolio-management's pending_action_table --
     # decision 3 explicitly reuses that pattern rather than inventing a new
     # one.
@@ -141,13 +160,15 @@ ALL_TABLES = [
     "list_table",
     "draft_table",
     "draft_task_table",
+    "draft_new_list_table",
     "pending_action_table",
 ]
 
-# draft_task lookups are always "all tasks for this draft" -- the one
-# lookup pattern worth indexing given the small expected row counts.
+# draft_task/draft_new_list lookups are always "all rows for this draft" --
+# the one lookup pattern worth indexing given the small expected row counts.
 INDEX_DDL = [
     "CREATE INDEX IF NOT EXISTS idx_draft_task_draft_id ON draft_task_table(draft_id)",
+    "CREATE INDEX IF NOT EXISTS idx_draft_new_list_draft_id ON draft_new_list_table(draft_id)",
 ]
 
 

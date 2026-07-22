@@ -482,15 +482,55 @@ def delete_draft_task(draft_id: str, task_id: str) -> dict:
 
 
 @mcp.tool()
+def add_draft_new_list(
+    draft_id: str, list_name: str, list_alt_names: Optional[list] = None,
+    list_category: Optional[list] = None, list_keywords: Optional[list] = None,
+    list_is_category_default: bool = False,
+) -> dict:
+    """Registers intent to create list_name as a brand-new REAL Microsoft
+    To Do list (with this category/keyword routing config) the next time
+    this draft is synced -- e.g. "there's no Tony Quiz list yet, let's make
+    one and put this task there." This call itself is immediate and never
+    touches MS Graph -- it only adds a new_lists entry to the draft (see
+    get_draft). The real list is only created when sync_draft runs for
+    this draft, under the SAME rule as sync_draft's tasks: state clearly
+    that a new list will be created and get the user's explicit
+    conversational go-ahead first -- there is no separate approval queue
+    for this, sync_draft's own confirmation is the only safeguard.
+
+    To actually put a task on this not-yet-real list, set that draft
+    task's list_name (via add_draft_task/edit_draft_task) to the same
+    list_name given here -- sync_draft resolves it to the list it just
+    created, in the same call. Returns the full updated draft."""
+    payload = {"list_name": list_name, "list_is_category_default": list_is_category_default}
+    if list_alt_names is not None:
+        payload["list_alt_names"] = list_alt_names
+    if list_category is not None:
+        payload["list_category"] = list_category
+    if list_keywords is not None:
+        payload["list_keywords"] = list_keywords
+    return _api("POST", f"/api/drafts/{draft_id}/new-lists", json=payload)
+
+
+@mcp.tool()
+def delete_draft_new_list(draft_id: str, new_list_id: str) -> dict:
+    """Cancels a pending add_draft_new_list registration before it's ever
+    synced -- this never touches MS To Do. new_list_id comes from
+    get_draft's new_lists. Returns the full updated draft."""
+    return _api("DELETE", f"/api/drafts/{draft_id}/new-lists/{new_list_id}")
+
+
+@mcp.tool()
 def sync_draft(draft_id: str, list_assignments: Optional[dict] = None) -> dict:
-    """Creates the draft's checked, not-yet-synced tasks in Microsoft To
+    """Creates any lists this draft has pending via add_draft_new_list,
+    then creates the draft's checked, not-yet-synced tasks in Microsoft To
     Do (with a photo attachment if the draft has one) -- the step that
-    actually writes to the user's real task lists. ALWAYS state exactly
-    which tasks you're about to sync and get the user's explicit go-ahead
-    in this conversation before calling this -- there is no separate
-    approval queue for it (decision 3: creating tasks is low-blast-radius,
-    same as the app's own GUI sync button), so this confirmation is the
-    only safeguard in place.
+    actually writes to the user's real account. ALWAYS state exactly which
+    tasks (and any new lists) you're about to create and get the user's
+    explicit go-ahead in this conversation before calling this -- there is
+    no separate approval queue for it (decision 3: creating tasks/lists is
+    low-blast-radius, same as the app's own GUI sync button), so this
+    confirmation is the only safeguard in place.
 
     list_assignments is optional: {task_id: list_name} overrides for tasks
     that don't already have a list assigned (or to redirect one that
@@ -500,10 +540,15 @@ def sync_draft(draft_id: str, list_assignments: Optional[dict] = None) -> dict:
     override path; the AI's own automatic routing (during extract_tasks)
     never invents a new list itself, it only ever names one of the
     already-configured list_config_entries or leaves the task unmatched.
+    Prefer add_draft_new_list over this override when the new list should
+    also get routing config (category/keywords/alt names) for future
+    auto-routing -- a list created only via this override gets no
+    list_table config at all.
 
-    Returns {"draft": ..., "results": [...]} -- each result is per-task
-    ("synced" or "failed" with a detail). Report any failures to the user
-    rather than assuming the whole batch succeeded."""
+    Returns {"draft": ..., "results": [...], "new_list_results": [...]} --
+    each result is per-task or per-new-list ("synced"/"created" or "failed"
+    with a detail). Report any failures to the user rather than assuming
+    the whole batch succeeded."""
     payload = {}
     if list_assignments is not None:
         payload["list_assignments"] = list_assignments

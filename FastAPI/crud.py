@@ -407,10 +407,10 @@ def create_draft(
 
 
 def get_draft(conn: sqlite3.Connection, draft_id: str) -> Optional[dict]:
-    """Returns the draft with its tasks nested under `tasks`, ordered the
-    same way they're meant to be displayed (task_order_index). This is what
-    both the GUI (page load/resume) and MCP's get_draft tool call to
-    re-ground against server truth."""
+    """Returns the draft with its tasks nested under `tasks` (ordered by
+    task_order_index) and any pending new-list registrations under
+    `new_lists`. This is what both the GUI (page load/resume) and MCP's
+    get_draft tool call to re-ground against server truth."""
     row = conn.execute(
         "SELECT * FROM draft_table WHERE draft_id = ?", (draft_id,)
     ).fetchone()
@@ -418,6 +418,7 @@ def get_draft(conn: sqlite3.Connection, draft_id: str) -> Optional[dict]:
         return None
     draft = dict(row)
     draft["tasks"] = list_draft_tasks(conn, draft_id)
+    draft["new_lists"] = list_draft_new_lists(conn, draft_id)
     return draft
 
 
@@ -591,6 +592,84 @@ def _require_task_in_draft(conn: sqlite3.Connection, draft_id: str, task_id: str
     ).fetchone()
     if row is None:
         raise helpers.ValidationError(f"task_id '{task_id}' does not exist in draft '{draft_id}'")
+
+
+# ===========================================================================
+# draft_new_list_table -- pending "create a brand-new real MS To Do list"
+# registrations on a draft (decision 3: gated the same way as the rest of
+# sync_draft, not the pending_action_table queue).
+# ===========================================================================
+
+
+def _new_list_row_to_dict(row: sqlite3.Row) -> dict:
+    d = dict(row)
+    d["list_alt_names"] = json.loads(d["list_alt_names"])
+    d["list_category"] = json.loads(d["list_category"])
+    d["list_keywords"] = json.loads(d["list_keywords"])
+    d["list_is_category_default"] = bool(d["list_is_category_default"])
+    return d
+
+
+def add_draft_new_list(
+    conn: sqlite3.Connection,
+    draft_id: str,
+    list_name: str,
+    list_alt_names: Optional[list] = None,
+    list_category: Optional[list] = None,
+    list_keywords: Optional[list] = None,
+    list_is_category_default: bool = False,
+) -> str:
+    """Registers intent to create list_name as a real Microsoft To Do list
+    (plus its list_table routing config) the next time this draft is
+    synced -- nothing touches Graph here. See sync_draft_route, which
+    creates every row of this draft's new_lists before syncing its tasks,
+    then deletes each row once the real list exists."""
+    _require_exists(conn, "draft_table", "draft_id", draft_id, "draft_id")
+    new_list_id = helpers.generate_id(conn, "draft_new_list_table", "new_list_id", "newlist_")
+    now = helpers.utc_now_iso()
+    conn.execute(
+        """
+        INSERT INTO draft_new_list_table
+            (new_list_id, draft_id, list_name, list_alt_names, list_category,
+             list_keywords, list_is_category_default, new_list_create_datetime_UTC)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            new_list_id, draft_id, list_name, json.dumps(list_alt_names or []),
+            json.dumps(list_category or []), json.dumps(list_keywords or []),
+            int(list_is_category_default), now,
+        ),
+    )
+    conn.commit()
+    return new_list_id
+
+
+def list_draft_new_lists(conn: sqlite3.Connection, draft_id: str) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM draft_new_list_table WHERE draft_id = ? ORDER BY new_list_create_datetime_UTC",
+        (draft_id,),
+    ).fetchall()
+    return [_new_list_row_to_dict(r) for r in rows]
+
+
+def _require_new_list_in_draft(conn: sqlite3.Connection, draft_id: str, new_list_id: str) -> None:
+    row = conn.execute(
+        "SELECT 1 FROM draft_new_list_table WHERE new_list_id = ? AND draft_id = ?", (new_list_id, draft_id)
+    ).fetchone()
+    if row is None:
+        raise helpers.ValidationError(f"new_list_id '{new_list_id}' does not exist in draft '{draft_id}'")
+
+
+def delete_draft_new_list(conn: sqlite3.Connection, draft_id: str, new_list_id: str) -> dict:
+    """Removes a pending new-list registration before it's ever synced --
+    this never touches MS Graph. Returns the full updated draft, same
+    reasoning as delete_draft_task."""
+    _require_new_list_in_draft(conn, draft_id, new_list_id)
+    conn.execute(
+        "DELETE FROM draft_new_list_table WHERE new_list_id = ? AND draft_id = ?", (new_list_id, draft_id)
+    )
+    conn.commit()
+    return get_draft(conn, draft_id)
 
 
 # ===========================================================================

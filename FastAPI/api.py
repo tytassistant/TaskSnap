@@ -221,17 +221,62 @@ def delete_draft_task_route(draft_id: str, task_id: str, conn: sqlite3.Connectio
     return crud.delete_draft_task(conn, draft_id, task_id)
 
 
+@router.post("/drafts/{draft_id}/new-lists", tags=["Drafts"], status_code=201)
+def add_draft_new_list_route(
+    draft_id: str, data: schemas.DraftNewListCreate, conn: sqlite3.Connection = Depends(get_db)
+):
+    _get_draft_or_404(conn, draft_id)
+    crud.add_draft_new_list(conn, draft_id, **data.model_dump())
+    return crud.get_draft(conn, draft_id)
+
+
+@router.delete("/drafts/{draft_id}/new-lists/{new_list_id}", tags=["Drafts"])
+def delete_draft_new_list_route(draft_id: str, new_list_id: str, conn: sqlite3.Connection = Depends(get_db)):
+    return crud.delete_draft_new_list(conn, draft_id, new_list_id)
+
+
 @router.post("/drafts/{draft_id}/sync", tags=["Drafts"])
 def sync_draft_route(draft_id: str, data: schemas.DraftSyncRequest, conn: sqlite3.Connection = Depends(get_db)):
-    """For each checked+unsynced task: resolve/create its MS To Do list,
-    create the task (+ photo attachment) in MS Graph, mark it synced.
-    Per-task failures are reported individually (results[]) rather than
-    aborting the whole call -- except an auth error, which aborts the rest
-    of the batch since every remaining task would fail the same way (same
-    behavior as the current JS's executeSyncTasks, plan §7)."""
+    """First creates every pending new_lists row (add_draft_new_list) as a
+    real Microsoft To Do list -- with its list_table routing config -- then,
+    for each checked+unsynced task: resolves/creates its MS To Do list,
+    creates the task (+ photo attachment) in MS Graph, marks it synced.
+    Per-item failures are reported individually (new_list_results[]/
+    results[]) rather than aborting the whole call -- except an auth error,
+    which aborts the rest of the batch since every remaining item would fail
+    the same way (same behavior as the current JS's executeSyncTasks, plan
+    §7)."""
     draft = _get_draft_or_404(conn, draft_id)
     overrides = data.list_assignments or {}
     lists_cache: Optional[list] = None
+    new_list_results = []
+    for new_list in draft["new_lists"]:
+        try:
+            if lists_cache is None:
+                lists_cache = graph_client.list_lists()
+            created_list = graph_client.create_list(new_list["list_name"])
+            lists_cache.append(created_list)
+            crud.add_list_entry(
+                conn,
+                list_name=new_list["list_name"],
+                list_ms_id=created_list["id"],
+                list_alt_names=new_list["list_alt_names"],
+                list_category=new_list["list_category"],
+                list_keywords=new_list["list_keywords"],
+                list_is_category_default=new_list["list_is_category_default"],
+            )
+            crud.delete_draft_new_list(conn, draft_id, new_list["new_list_id"])
+            new_list_results.append({
+                "new_list_id": new_list["new_list_id"], "status": "created", "list_id": created_list["id"],
+            })
+        except graph_client.GraphError as exc:
+            new_list_results.append({
+                "new_list_id": new_list["new_list_id"], "status": "failed", "detail": str(exc),
+            })
+            if exc.is_auth_error:
+                break
+
+    draft = crud.get_draft(conn, draft_id)
     results = []
     for task in draft["tasks"]:
         if not task["task_checked"] or task["task_synced"]:
@@ -266,7 +311,7 @@ def sync_draft_route(draft_id: str, data: schemas.DraftSyncRequest, conn: sqlite
     if all(t["task_synced"] or not t["task_checked"] for t in updated_draft["tasks"]):
         crud.set_draft_status(conn, draft_id, "synced")
         updated_draft = crud.get_draft(conn, draft_id)
-    return {"draft": updated_draft, "results": results}
+    return {"draft": updated_draft, "results": results, "new_list_results": new_list_results}
 
 
 # ---------------------------------------------------------------------------
