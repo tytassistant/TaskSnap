@@ -154,6 +154,7 @@ def _build_task_body(
     due_datetime: Optional[str] = None,
     timezone: str = "UTC",
     reminder_datetime: Optional[str] = None,
+    status: Optional[str] = None,
 ) -> dict:
     task_body: dict = {}
     if title is not None:
@@ -167,6 +168,8 @@ def _build_task_body(
     if reminder_datetime is not None:
         task_body["isReminderOn"] = True
         task_body["reminderDateTime"] = {"dateTime": reminder_datetime, "timeZone": timezone}
+    if status is not None:
+        task_body["status"] = status
     return task_body
 
 
@@ -193,13 +196,14 @@ def update_task(
     body: Optional[str] = None,
     due_datetime: Optional[str] = None,
     timezone: Optional[str] = None,
+    status: Optional[str] = None,
 ) -> dict:
     """PATCH an existing task -- backs the queued edit path (decision 3):
     the pending-action replay hits PATCH /api/tasks/{list_id}/{task_id},
     which calls this. Only fields actually passed get included in the
     Graph request body (None means "don't touch this field", not "clear
     it")."""
-    task_body = _build_task_body(title, body, due_datetime, timezone or "UTC")
+    task_body = _build_task_body(title, body, due_datetime, timezone or "UTC", status=status)
     resp = requests.patch(
         f"{GRAPH_BASE}/lists/{list_id}/tasks/{task_id}", headers=_headers(timezone), json=task_body, timeout=30
     )

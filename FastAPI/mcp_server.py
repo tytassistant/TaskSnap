@@ -503,13 +503,16 @@ def update_task(
     list_id: str, task_id: str,
     title: Optional[str] = None, body: Optional[str] = None,
     due_datetime: Optional[str] = None, timezone: Optional[str] = None,
+    status: Optional[str] = None,
 ) -> dict:
     """Queues editing an ALREADY-SYNCED Microsoft To Do task for HUMAN
     APPROVAL -- nothing changes until the user approves it (Settings ->
     Pending Approvals). Only for a task that already exists in MS To Do
     (list_id/task_id from a previous sync_draft result or a Graph lookup
     -- NOT a draft's task_id). For a task still sitting in a draft, use
-    edit_draft_task instead -- that's immediate, no approval needed."""
+    edit_draft_task instead -- that's immediate, no approval needed.
+    status is one of notStarted/inProgress/completed/waitingOnOthers/
+    deferred -- use "completed" to mark done, "notStarted" to reopen."""
     payload = {}
     if title is not None:
         payload["title"] = title
@@ -519,6 +522,8 @@ def update_task(
         payload["due_datetime"] = due_datetime
     if timezone is not None:
         payload["timezone"] = timezone
+    if status is not None:
+        payload["status"] = status
     summary = f"Edit task {task_id} in list {list_id} -- set {payload}"
     return _queue(summary, "PATCH", f"/api/tasks/{list_id}/{task_id}", payload)
 

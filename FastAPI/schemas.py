@@ -153,6 +153,9 @@ class ListCreate(_StrictModel):
 # ---------------------------------------------------------------------------
 
 
+TaskStatus = Literal["notStarted", "inProgress", "completed", "waitingOnOthers", "deferred"]
+
+
 class SyncedTaskUpdate(_StrictModel):
     """Body of the queued PATCH /api/tasks/{list_id}/{task_id} action --
     what a pending_action_table row's payload contains, replayed against
@@ -161,6 +164,7 @@ class SyncedTaskUpdate(_StrictModel):
     body: Optional[str] = None
     due_datetime: Optional[str] = None
     timezone: Optional[str] = None
+    status: Optional[TaskStatus] = None
 
 
 # ---------------------------------------------------------------------------
