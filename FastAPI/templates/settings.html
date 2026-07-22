@@ -45,19 +45,6 @@
     </div>
   </div>
 
-  <!-- Extraction rules (decision 6) -->
-  <div class="card">
-    <div class="card-title">List-override examples</div>
-    <div class="card-desc">
-      Extra example phrasings shown to the AI for detecting when you've explicitly named a list
-      (e.g. "put homework in household list"). One per line — the core matching logic stays fixed;
-      this just adds phrasing examples specific to how you write.
-    </div>
-    <div class="field">
-      <textarea id="listOverrideRules" rows="4" placeholder="put homework in household list"></textarea>
-    </div>
-  </div>
-
   <div class="card">
     <div class="card-title">Defaults</div>
     <div class="field">
@@ -68,11 +55,23 @@
       <label>Default timezone</label>
       <select id="defaultTimezone"></select>
     </div>
+    <button class="btn btn-primary btn-block" id="saveBtn" type="button">
+      <i class="fas fa-floppy-disk"></i> Save settings
+    </button>
   </div>
 
-  <button class="btn btn-primary btn-block" id="saveBtn" type="button">
-    <i class="fas fa-floppy-disk"></i> Save settings
-  </button>
+  <!-- Extraction rules (decision 6) -->
+  <div class="card">
+    <div class="card-title">List overrides</div>
+    <div class="card-desc">
+      Extra example phrasings shown to the AI for detecting when you've explicitly named a list
+      (e.g. "put homework in household list"). One per line — the core matching logic stays fixed;
+      this just adds phrasing examples specific to how you write.
+    </div>
+    <div class="field">
+      <textarea id="listOverrideRules" rows="4" placeholder="put homework in household list"></textarea>
+    </div>
+  </div>
 
   <!-- Manage lists (list_table refactor) -->
   <div class="card">

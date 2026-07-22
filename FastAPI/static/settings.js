@@ -127,15 +127,15 @@ function createListEntryRow(entry) {
     '</div>' +
     '<div class="field">' +
       '<label>Alt names <span style="font-weight:400;">(one per line, optional)</span></label>' +
-      '<textarea class="le-alt" rows="2" placeholder="household"></textarea>' +
+      '<textarea class="le-alt" rows="2" placeholder="[Example 1]&#10;[Example 2]"></textarea>' +
     '</div>' +
     '<div class="field">' +
-      '<label>Category <span style="font-weight:400;">(one per line)</span></label>' +
-      '<textarea class="le-category" rows="2" placeholder="Theo"></textarea>' +
+      '<label>Category</label>' +
+      '<input type="text" class="le-category" placeholder="e.g. Theo">' +
     '</div>' +
     '<div class="field">' +
       '<label>Keywords <span style="font-weight:400;">(one per line, optional)</span></label>' +
-      '<textarea class="le-keywords" rows="3" placeholder="quiz&#10;exam"></textarea>' +
+      '<textarea class="le-keywords" rows="3" placeholder="[Example 1]&#10;[Example 2]"></textarea>' +
     '</div>' +
     '<label style="display:flex; align-items:center; gap:8px; font-size:14px; margin-bottom:12px;">' +
       '<input type="checkbox" class="le-default" style="width:16px; height:16px;"> Default list for this category' +
@@ -149,7 +149,7 @@ function createListEntryRow(entry) {
 
   row.querySelector(".le-name").value = entry.list_name || "";
   row.querySelector(".le-alt").value = listToLines(entry.list_alt_names);
-  row.querySelector(".le-category").value = listToLines(entry.list_category);
+  row.querySelector(".le-category").value = (entry.list_category || [])[0] || "";
   row.querySelector(".le-keywords").value = listToLines(entry.list_keywords);
   row.querySelector(".le-default").checked = !!entry.list_is_category_default;
 
@@ -157,7 +157,7 @@ function createListEntryRow(entry) {
     var payload = {
       list_name: row.querySelector(".le-name").value.trim(),
       list_alt_names: linesToList(row.querySelector(".le-alt").value),
-      list_category: linesToList(row.querySelector(".le-category").value),
+      list_category: row.querySelector(".le-category").value.trim() ? [row.querySelector(".le-category").value.trim()] : [],
       list_keywords: linesToList(row.querySelector(".le-keywords").value),
       list_is_category_default: row.querySelector(".le-default").checked,
     };
