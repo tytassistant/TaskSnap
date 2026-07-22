@@ -9,8 +9,10 @@ portfolio-management's api.py).
 
 import base64
 import os
+import re
 import sqlite3
 import threading
+from datetime import datetime
 from typing import Optional
 
 import requests
@@ -276,6 +278,62 @@ def sync_draft_route(draft_id: str, data: schemas.DraftSyncRequest, conn: sqlite
 @router.get("/lists", tags=["Lists"])
 def list_lists_route():
     return graph_client.list_lists()
+
+
+_DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _parse_due_bound(value: str, end_of_day: bool) -> datetime:
+    """Accepts either a date-only string (interpreted as the start/end of
+    that day, whichever bound is being parsed) or a full ISO datetime."""
+    if _DATE_ONLY_RE.match(value):
+        value += "T23:59:59" if end_of_day else "T00:00:00"
+    return datetime.fromisoformat(value)
+
+
+def _task_due_datetime(task: dict) -> Optional[datetime]:
+    due = task.get("dueDateTime")
+    if not due or not due.get("dateTime"):
+        return None
+    try:
+        return datetime.fromisoformat(due["dateTime"].split(".")[0])
+    except ValueError:
+        return None
+
+
+def _filter_tasks(
+    tasks: list[dict], status: str, due_before: Optional[str], due_after: Optional[str]
+) -> list[dict]:
+    """status/due_before/due_after all applied client-side rather than via
+    Graph's $filter -- its support for filtering nested dueDateTime/status
+    properties is inconsistent across list types, and at this app's scale
+    (a handful of lists, tens of tasks each) fetching a list's tasks and
+    filtering in Python is simpler and more reliable."""
+    if status == "open":
+        tasks = [t for t in tasks if t.get("status") != "completed"]
+    elif status == "completed":
+        tasks = [t for t in tasks if t.get("status") == "completed"]
+    if due_before:
+        cutoff = _parse_due_bound(due_before, end_of_day=True)
+        tasks = [t for t in tasks if (d := _task_due_datetime(t)) is not None and d <= cutoff]
+    if due_after:
+        floor = _parse_due_bound(due_after, end_of_day=False)
+        tasks = [t for t in tasks if (d := _task_due_datetime(t)) is not None and d >= floor]
+    return tasks
+
+
+@router.get("/lists/{list_id}/tasks", tags=["Lists"])
+def list_tasks_in_list_route(
+    list_id: str,
+    status: str = Query("open", pattern="^(open|completed|all)$"),
+    due_before: Optional[str] = Query(None),
+    due_after: Optional[str] = Query(None),
+):
+    """Raw Graph passthrough (like GET /lists) plus status/due-date
+    filtering -- read-only, so no approval gate needed (decision 3 only
+    gates writes to already-synced tasks)."""
+    tasks = graph_client.list_tasks(list_id)
+    return _filter_tasks(tasks, status, due_before, due_after)
 
 
 @router.post("/lists", tags=["Lists"], status_code=201)

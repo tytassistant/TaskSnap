@@ -157,6 +157,79 @@ def list_task_lists() -> list:
 
 
 # ---------------------------------------------------------------------------
+# Reading existing MS To Do tasks -- pure reads, so no approval gate
+# (decision 3 only gates writes to already-synced tasks). Both tools
+# resolve list_name against a live list_task_lists fetch, same
+# case-insensitive match as everywhere else a list name is typed by hand.
+# ---------------------------------------------------------------------------
+
+
+def _resolve_list(list_name: str) -> dict:
+    lists = _api("GET", "/api/lists")
+    lower = list_name.strip().lower()
+    exact = [l for l in lists if l["displayName"].lower() == lower]
+    if exact:
+        return exact[0]
+    partial = [l for l in lists if lower in l["displayName"].lower()]
+    if len(partial) == 1:
+        return partial[0]
+    if partial:
+        raise RuntimeError(
+            f'"{list_name}" matches multiple lists '
+            f'({", ".join(l["displayName"] for l in partial)}) -- use the exact name.'
+        )
+    names = ", ".join(l["displayName"] for l in lists)
+    raise RuntimeError(f'No Microsoft To Do list named "{list_name}". Available lists: {names}')
+
+
+def _shape_task(task: dict) -> dict:
+    due = task.get("dueDateTime") or {}
+    notes = ((task.get("body") or {}).get("content") or "").strip()
+    shaped = {
+        "task_id": task["id"],
+        "title": task.get("title"),
+        "status": task.get("status"),
+        "due_datetime": due.get("dateTime"),
+    }
+    if notes:
+        shaped["notes"] = notes
+    return shaped
+
+
+@mcp.tool()
+def list_tasks_in_list(list_name: str, status: str = "open") -> list:
+    """Tasks in one Microsoft To Do list, fetched live from MS Graph.
+    list_name is matched case-insensitively against the real list names
+    (see list_task_lists), not list_config_entries. status is "open"
+    (default -- not completed), "completed", or "all"."""
+    lst = _resolve_list(list_name)
+    tasks = _api("GET", f"/api/lists/{lst['id']}/tasks", params={"status": status})
+    return [_shape_task(t) for t in tasks]
+
+
+@mcp.tool()
+def find_tasks_due(
+    due_before: str, due_after: Optional[str] = None, list_name: Optional[str] = None, status: str = "open",
+) -> list:
+    """Tasks due on or before due_before (YYYY-MM-DD or a full ISO
+    datetime), optionally also on or after due_after. Scoped to one list
+    if list_name is given, otherwise searched across every real MS To Do
+    list -- each result is tagged with list_name so a cross-list search
+    stays readable. status defaults to "open" (not completed); pass
+    "completed" or "all" to include finished tasks too."""
+    params = {"status": status, "due_before": due_before}
+    if due_after:
+        params["due_after"] = due_after
+    lists = [_resolve_list(list_name)] if list_name else _api("GET", "/api/lists")
+    results = []
+    for lst in lists:
+        tasks = _api("GET", f"/api/lists/{lst['id']}/tasks", params=params)
+        results.extend(dict(_shape_task(t), list_name=lst["displayName"]) for t in tasks)
+    results.sort(key=lambda t: t.get("due_datetime") or "")
+    return results
+
+
+# ---------------------------------------------------------------------------
 # list_table (list_table refactor) -- category/keyword config per list,
 # read/write so an agent can explain or manage routing conversationally,
 # not just through the Settings GUI.

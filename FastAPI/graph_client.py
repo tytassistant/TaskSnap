@@ -207,6 +207,22 @@ def update_task(
     return resp.json()
 
 
+def list_tasks(list_id: str) -> list[dict]:
+    """All tasks in a list, raw Graph shape (status/dueDateTime/body
+    untouched -- filtering by status or due date is api.py's job, same
+    division of labor as everything else here). Follows @odata.nextLink
+    so a list with more than one page of tasks isn't silently truncated."""
+    tasks: list[dict] = []
+    url = f"{GRAPH_BASE}/lists/{list_id}/tasks"
+    while url:
+        resp = requests.get(url, headers=_headers(), timeout=30)
+        _raise_for_graph_error(resp)
+        page = resp.json()
+        tasks.extend(page.get("value", []))
+        url = page.get("@odata.nextLink")
+    return tasks
+
+
 def delete_task(list_id: str, task_id: str) -> None:
     """Backs the queued delete path (decision 3). Graph returns 204 on
     success; treat 404 (already gone) as success too, since the queued
