@@ -236,6 +236,55 @@ def delete_task(list_id: str, task_id: str) -> None:
         _raise_for_graph_error(resp)
 
 
+# ---------------------------------------------------------------------------
+# Checklist items (steps) on a task
+# ---------------------------------------------------------------------------
+
+
+def list_checklist_items(list_id: str, task_id: str) -> list[dict]:
+    """Raw Graph shape (isChecked/displayName untouched) -- filtering by
+    checked state is api.py's job, same division of labor as list_tasks."""
+    resp = requests.get(
+        f"{GRAPH_BASE}/lists/{list_id}/tasks/{task_id}/checklistItems", headers=_headers(), timeout=30
+    )
+    _raise_for_graph_error(resp)
+    return resp.json().get("value", [])
+
+
+def create_checklist_item(list_id: str, task_id: str, display_name: str) -> dict:
+    """Backs the queued add-step path (decision 3 -- adding a step changes
+    an already-real task, so it's gated like update_task/delete_task)."""
+    resp = requests.post(
+        f"{GRAPH_BASE}/lists/{list_id}/tasks/{task_id}/checklistItems",
+        headers=_headers(), json={"displayName": display_name}, timeout=30,
+    )
+    _raise_for_graph_error(resp)
+    return resp.json()
+
+
+def update_checklist_item(list_id: str, task_id: str, item_id: str, is_checked: bool) -> dict:
+    """Toggles a step's checked state -- called directly, no approval
+    queue (treated like sync_draft: low blast-radius, trivially reversed
+    by toggling again)."""
+    resp = requests.patch(
+        f"{GRAPH_BASE}/lists/{list_id}/tasks/{task_id}/checklistItems/{item_id}",
+        headers=_headers(), json={"isChecked": is_checked}, timeout=30,
+    )
+    _raise_for_graph_error(resp)
+    return resp.json()
+
+
+def delete_checklist_item(list_id: str, task_id: str, item_id: str) -> None:
+    """Backs the queued delete-step path (decision 3). Graph returns 204 on
+    success; treat 404 (already gone) as success too, same reasoning as
+    delete_task."""
+    resp = requests.delete(
+        f"{GRAPH_BASE}/lists/{list_id}/tasks/{task_id}/checklistItems/{item_id}", headers=_headers(), timeout=30
+    )
+    if resp.status_code not in (204, 404):
+        _raise_for_graph_error(resp)
+
+
 def attach_photo(
     list_id: str,
     task_id: str,

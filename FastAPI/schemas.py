@@ -168,6 +168,24 @@ class SyncedTaskUpdate(_StrictModel):
 
 
 # ---------------------------------------------------------------------------
+# Checklist items (steps) on an already-synced task
+# ---------------------------------------------------------------------------
+
+
+class ChecklistItemCreate(_StrictModel):
+    """Body of the queued POST .../checklist-items action -- adding a step
+    changes an already-real task, so it's gated the same as SyncedTaskUpdate."""
+    display_name: str
+
+
+class ChecklistItemUpdate(_StrictModel):
+    """Body of PATCH .../checklist-items/{item_id} -- called directly, no
+    approval queue (toggling a step's checked state is treated like
+    sync_draft: low blast-radius, trivially reversed)."""
+    is_checked: bool
+
+
+# ---------------------------------------------------------------------------
 # pending_action_table
 # ---------------------------------------------------------------------------
 

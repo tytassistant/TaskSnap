@@ -229,6 +229,24 @@ def find_tasks_due(
     return results
 
 
+def _shape_step(item: dict) -> dict:
+    return {
+        "step_id": item["id"],
+        "display_name": item.get("displayName"),
+        "is_checked": bool(item.get("isChecked")),
+    }
+
+
+@mcp.tool()
+def list_task_steps(list_id: str, task_id: str, status: str = "open") -> list:
+    """Checklist items (steps) on one already-synced Microsoft To Do task
+    (list_id/task_id from list_tasks_in_list, find_tasks_due, or a
+    sync_draft result). status is "open" (default -- unchecked),
+    "completed" (checked), or "all". Pure read, no approval gate."""
+    items = _api("GET", f"/api/tasks/{list_id}/{task_id}/checklist-items", params={"status": status})
+    return [_shape_step(i) for i in items]
+
+
 # ---------------------------------------------------------------------------
 # list_table (list_table refactor) -- category/keyword config per list,
 # read/write so an agent can explain or manage routing conversationally,
@@ -536,6 +554,36 @@ def delete_task(list_id: str, task_id: str) -> dict:
     delete_draft_task instead -- that's immediate, no approval needed."""
     summary = f"Delete task {task_id} from list {list_id}"
     return _queue(summary, "DELETE", f"/api/tasks/{list_id}/{task_id}")
+
+
+@mcp.tool()
+def add_task_step(list_id: str, task_id: str, display_name: str) -> dict:
+    """Queues adding a checklist item (step) to an ALREADY-SYNCED task for
+    HUMAN APPROVAL -- nothing changes until the user approves it (Settings
+    -> Pending Approvals). Adding a step changes an already-real task, so
+    it's gated the same as update_task/delete_task."""
+    summary = f'Add step "{display_name}" to task {task_id} in list {list_id}'
+    return _queue(summary, "POST", f"/api/tasks/{list_id}/{task_id}/checklist-items", {"display_name": display_name})
+
+
+@mcp.tool()
+def update_task_step(list_id: str, task_id: str, step_id: str, is_checked: bool) -> dict:
+    """Checks or unchecks a step on an ALREADY-SYNCED task -- applied
+    IMMEDIATELY, no approval needed (unlike update_task/delete_task):
+    toggling a step is low blast-radius and trivially reversed by toggling
+    it back. step_id comes from list_task_steps."""
+    return _api(
+        "PATCH", f"/api/tasks/{list_id}/{task_id}/checklist-items/{step_id}", json={"is_checked": is_checked}
+    )
+
+
+@mcp.tool()
+def delete_task_step(list_id: str, task_id: str, step_id: str) -> dict:
+    """Queues deleting a checklist item (step) from an ALREADY-SYNCED task
+    for HUMAN APPROVAL -- nothing changes until the user approves it
+    (Settings -> Pending Approvals). step_id comes from list_task_steps."""
+    summary = f"Delete step {step_id} from task {task_id} in list {list_id}"
+    return _queue(summary, "DELETE", f"/api/tasks/{list_id}/{task_id}/checklist-items/{step_id}")
 
 
 @mcp.tool()

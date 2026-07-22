@@ -389,6 +389,43 @@ def delete_synced_task_route(list_id: str, task_id: str):
 
 
 # ---------------------------------------------------------------------------
+# Checklist items (steps) on an already-synced task. Reads are unrestricted,
+# same as list_tasks_in_list_route (decision 3 only gates writes). Toggling
+# is_checked is called directly by the MCP tool, no approval queue --
+# add/delete are reached only via the pending-action approval replay, same
+# as update_synced_task_route/delete_synced_task_route above.
+# ---------------------------------------------------------------------------
+
+
+@router.get("/tasks/{list_id}/{task_id}/checklist-items", tags=["Tasks"])
+def list_checklist_items_route(
+    list_id: str, task_id: str, status: str = Query("open", pattern="^(open|completed|all)$"),
+):
+    items = graph_client.list_checklist_items(list_id, task_id)
+    if status == "open":
+        items = [i for i in items if not i.get("isChecked")]
+    elif status == "completed":
+        items = [i for i in items if i.get("isChecked")]
+    return items
+
+
+@router.post("/tasks/{list_id}/{task_id}/checklist-items", tags=["Tasks"], status_code=201)
+def create_checklist_item_route(list_id: str, task_id: str, data: schemas.ChecklistItemCreate):
+    return graph_client.create_checklist_item(list_id, task_id, data.display_name)
+
+
+@router.patch("/tasks/{list_id}/{task_id}/checklist-items/{item_id}", tags=["Tasks"])
+def update_checklist_item_route(list_id: str, task_id: str, item_id: str, data: schemas.ChecklistItemUpdate):
+    return graph_client.update_checklist_item(list_id, task_id, item_id, data.is_checked)
+
+
+@router.delete("/tasks/{list_id}/{task_id}/checklist-items/{item_id}", tags=["Tasks"])
+def delete_checklist_item_route(list_id: str, task_id: str, item_id: str):
+    graph_client.delete_checklist_item(list_id, task_id, item_id)
+    return {"deleted": True}
+
+
+# ---------------------------------------------------------------------------
 # pending_action_table (decision 3) -- fully implemented, self-contained
 # ---------------------------------------------------------------------------
 
