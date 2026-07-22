@@ -333,6 +333,24 @@ def delete_list_entry(list_id: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def _shape_draft_task(task: dict) -> dict:
+    """Renames the raw task_checked column to to_sync for the agent-facing
+    shape -- "checked" repeatedly got misread as the task's completion
+    status. It is NOT that: a synced task's completion is update_task's
+    status field (notStarted/completed/...); a checklist item's done-ness
+    is update_task_step's is_checked. to_sync only ever means "should
+    sync_draft create this in Microsoft To Do.\""""
+    shaped = dict(task)
+    shaped["to_sync"] = shaped.pop("task_checked")
+    return shaped
+
+
+def _shape_draft(draft: dict) -> dict:
+    shaped = dict(draft)
+    shaped["tasks"] = [_shape_draft_task(t) for t in draft["tasks"]]
+    return shaped
+
+
 @mcp.tool()
 def extract_tasks(
     image_b64: Optional[str] = None, text: Optional[str] = None, timezone: Optional[str] = None,
@@ -355,12 +373,15 @@ def extract_tasks(
     household list" is recognized automatically -- no separate call
     needed.
 
-    Each task's task_checked reflects the app's own default-selection
-    rules (date-specific tasks, or tasks the AI confidently routed to a
-    list, default checked when the input was photo-only; everything
-    defaults checked when any text was given) -- treat this as a starting
-    point, but the user's own instructions in this conversation take
-    precedence over it.
+    Each task's to_sync reflects the app's own default-selection rules
+    (date-specific tasks, or tasks the AI confidently routed to a list,
+    default to_sync=True when the input was photo-only; everything
+    defaults to_sync=True when any text was given) -- treat this as a
+    starting point, but the user's own instructions in this conversation
+    take precedence over it. to_sync is NOT a completion status -- it only
+    controls whether sync_draft will create this task in Microsoft To Do
+    at all; a task with to_sync=False just means "still under review,
+    don't sync it yet."
 
     timezone affects both how due dates are interpreted and what's sent to
     Microsoft To Do at sync time -- omit it to use the app's configured
@@ -375,7 +396,7 @@ def extract_tasks(
     files = None
     if image_b64:
         files = {"image": ("photo.jpg", base64.b64decode(image_b64), "image/jpeg")}
-    return _api("POST", "/api/extract", data=data, files=files)
+    return _shape_draft(_api("POST", "/api/extract", data=data, files=files))
 
 
 @mcp.tool()
@@ -393,7 +414,7 @@ def get_draft(draft_id: str) -> dict:
     """Current state of a draft, including all its tasks. Call this to
     re-ground yourself if the conversation has gone on for a while --
     always trust this over your own memory of the draft's contents."""
-    return _api("GET", f"/api/drafts/{draft_id}")
+    return _shape_draft(_api("GET", f"/api/drafts/{draft_id}"))
 
 
 @mcp.tool()
@@ -413,17 +434,25 @@ def add_draft_task(
     body: Optional[str] = None, due_datetime: Optional[str] = None,
     timezone: Optional[str] = None,
     reminder_datetime: Optional[str] = None, list_name: Optional[str] = None,
-    category: Optional[str] = None, checked: bool = True,
+    category: Optional[str] = None, to_sync: bool = True,
 ) -> dict:
     """Adds a new task to an existing draft (kind: 'task' or 'event').
     Give list_name if you know the exact destination list; otherwise give
     category (e.g. "Tony") and the app resolves it to that category's
     default list itself -- you don't need to already know which specific
     list that is (check list_config_entries if you want to know anyway).
-    list_name wins if both are given. Returns the full updated draft --
-    show it to the user so they can confirm the add looks right before
-    any sync."""
-    payload = {"kind": kind, "title": title, "checked": checked}
+    list_name wins if both are given.
+
+    to_sync is NOT a completion status -- it only controls whether
+    sync_draft will create this task in Microsoft To Do at all.
+    to_sync=True (default) means "include it next time sync_draft runs";
+    to_sync=False means "keep it in the draft for now, don't sync yet."
+    (A synced task's own completion is a separate thing entirely -- see
+    update_task's status field.)
+
+    Returns the full updated draft -- show it to the user so they can
+    confirm the add looks right before any sync."""
+    payload = {"kind": kind, "title": title, "checked": to_sync}
     if body is not None:
         payload["body"] = body
     if due_datetime is not None:
@@ -436,7 +465,7 @@ def add_draft_task(
         payload["list_name"] = list_name
     if category is not None:
         payload["category"] = category
-    return _api("POST", f"/api/drafts/{draft_id}/tasks", json=payload)
+    return _shape_draft(_api("POST", f"/api/drafts/{draft_id}/tasks", json=payload))
 
 
 @mcp.tool()
@@ -446,7 +475,7 @@ def edit_draft_task(
     due_datetime: Optional[str] = None, timezone: Optional[str] = None,
     reminder_datetime: Optional[str] = None,
     list_name: Optional[str] = None, list_id: Optional[str] = None,
-    category: Optional[str] = None, checked: Optional[bool] = None,
+    category: Optional[str] = None, to_sync: Optional[bool] = None,
 ) -> dict:
     """Edits one or more fields on an existing draft task. task_id must be
     an exact id from a previous get_draft/extract_tasks/add_draft_task
@@ -457,9 +486,11 @@ def edit_draft_task(
 
     category works the same as on add_draft_task (resolved to that
     category's default list) -- only applied when list_name isn't also
-    given in this same call. Returns the full updated draft -- always
-    show it back to the user so they can catch a misinterpretation
-    immediately, rather than assuming the edit landed as intended."""
+    given in this same call. to_sync works the same as on add_draft_task
+    (it's not a completion status -- just whether sync_draft should create
+    this task at all). Returns the full updated draft -- always show it
+    back to the user so they can catch a misinterpretation immediately,
+    rather than assuming the edit landed as intended."""
     payload = {}
     if title is not None:
         payload["title"] = title
@@ -477,16 +508,16 @@ def edit_draft_task(
         payload["list_id"] = list_id
     if category is not None:
         payload["category"] = category
-    if checked is not None:
-        payload["checked"] = checked
-    return _api("PATCH", f"/api/drafts/{draft_id}/tasks/{task_id}", json=payload)
+    if to_sync is not None:
+        payload["checked"] = to_sync
+    return _shape_draft(_api("PATCH", f"/api/drafts/{draft_id}/tasks/{task_id}", json=payload))
 
 
 @mcp.tool()
 def delete_draft_task(draft_id: str, task_id: str) -> dict:
     """Removes a task from a draft before it's ever synced -- this never
     touches MS To Do. Returns the full updated draft."""
-    return _api("DELETE", f"/api/drafts/{draft_id}/tasks/{task_id}")
+    return _shape_draft(_api("DELETE", f"/api/drafts/{draft_id}/tasks/{task_id}"))
 
 
 @mcp.tool()
@@ -517,7 +548,7 @@ def add_draft_new_list(
         payload["list_category"] = list_category
     if list_keywords is not None:
         payload["list_keywords"] = list_keywords
-    return _api("POST", f"/api/drafts/{draft_id}/new-lists", json=payload)
+    return _shape_draft(_api("POST", f"/api/drafts/{draft_id}/new-lists", json=payload))
 
 
 @mcp.tool()
@@ -525,20 +556,20 @@ def delete_draft_new_list(draft_id: str, new_list_id: str) -> dict:
     """Cancels a pending add_draft_new_list registration before it's ever
     synced -- this never touches MS To Do. new_list_id comes from
     get_draft's new_lists. Returns the full updated draft."""
-    return _api("DELETE", f"/api/drafts/{draft_id}/new-lists/{new_list_id}")
+    return _shape_draft(_api("DELETE", f"/api/drafts/{draft_id}/new-lists/{new_list_id}"))
 
 
 @mcp.tool()
 def sync_draft(draft_id: str, list_assignments: Optional[dict] = None) -> dict:
     """Creates any lists this draft has pending via add_draft_new_list,
-    then creates the draft's checked, not-yet-synced tasks in Microsoft To
-    Do (with a photo attachment if the draft has one) -- the step that
-    actually writes to the user's real account. ALWAYS state exactly which
-    tasks (and any new lists) you're about to create and get the user's
-    explicit go-ahead in this conversation before calling this -- there is
-    no separate approval queue for it (decision 3: creating tasks/lists is
-    low-blast-radius, same as the app's own GUI sync button), so this
-    confirmation is the only safeguard in place.
+    then creates the draft's to_sync=True, not-yet-synced tasks in
+    Microsoft To Do (with a photo attachment if the draft has one) -- the
+    step that actually writes to the user's real account. ALWAYS state
+    exactly which tasks (and any new lists) you're about to create and get
+    the user's explicit go-ahead in this conversation before calling this
+    -- there is no separate approval queue for it (decision 3: creating
+    tasks/lists is low-blast-radius, same as the app's own GUI sync
+    button), so this confirmation is the only safeguard in place.
 
     list_assignments is optional: {task_id: list_name} overrides for tasks
     that don't already have a list assigned (or to redirect one that
@@ -553,14 +584,23 @@ def sync_draft(draft_id: str, list_assignments: Optional[dict] = None) -> dict:
     auto-routing -- a list created only via this override gets no
     list_table config at all.
 
-    Returns {"draft": ..., "results": [...], "new_list_results": [...]} --
-    each result is per-task or per-new-list ("synced"/"created" or "failed"
-    with a detail). Report any failures to the user rather than assuming
-    the whole batch succeeded."""
+    Returns {"draft": ..., "results": [...], "new_list_results": [...],
+    "skipped_not_to_sync": [...]}. results/new_list_results are per-task/
+    per-new-list ("synced"/"created" or "failed" with a detail) -- report
+    any failures to the user rather than assuming the whole batch
+    succeeded. skipped_not_to_sync lists any task that's still sitting in
+    the draft, untouched, because its to_sync is False -- if you expected
+    a task to be created and it shows up here instead of in results, that
+    means it was never actually marked to_sync=True (use edit_draft_task/
+    add_draft_task's to_sync field, or ask the user, then call sync_draft
+    again)."""
     payload = {}
     if list_assignments is not None:
         payload["list_assignments"] = list_assignments
-    return _api("POST", f"/api/drafts/{draft_id}/sync", json=payload)
+    result = _api("POST", f"/api/drafts/{draft_id}/sync", json=payload)
+    result["draft"] = _shape_draft(result["draft"])
+    result["skipped_not_to_sync"] = result.pop("skipped_unchecked")
+    return result
 
 
 # ---------------------------------------------------------------------------

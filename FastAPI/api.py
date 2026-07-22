@@ -250,7 +250,15 @@ def sync_draft_route(draft_id: str, data: schemas.DraftSyncRequest, conn: sqlite
     results[]) rather than aborting the whole call -- except an auth error,
     which aborts the rest of the batch since every remaining item would fail
     the same way (same behavior as the current JS's executeSyncTasks, plan
-    §7)."""
+    §7).
+
+    Unchecked-but-still-present tasks are never attempted -- they're
+    reported separately in skipped_unchecked[], not results[], since the
+    web GUI treats any non-"synced" results[] entry as a sync failure
+    (its own checkboxes are what left them unchecked in the first place,
+    so that's never a surprise there); an MCP caller has no checkbox UI,
+    so skipped_unchecked[] is what tells it a task is still sitting
+    unsynced in the draft."""
     draft = _get_draft_or_404(conn, draft_id)
     overrides = data.list_assignments or {}
     lists_cache: Optional[list] = None
@@ -283,8 +291,20 @@ def sync_draft_route(draft_id: str, data: schemas.DraftSyncRequest, conn: sqlite
 
     draft = crud.get_draft(conn, draft_id)
     results = []
+    skipped_unchecked = []
     for task in draft["tasks"]:
-        if not task["task_checked"] or task["task_synced"]:
+        if task["task_synced"]:
+            continue
+        if not task["task_checked"]:
+            # Deliberately excluded from `results` -- the web GUI counts
+            # any non-"synced" result as an error (static/app.js
+            # showSyncResult), and under normal GUI use every currently-
+            # unchecked task was just left that way on purpose via the
+            # review screen's checkboxes, so it must never show up as a
+            # sync failure there. Surfaced separately instead, purely so
+            # an MCP caller (which has no checkbox UI to see this) knows
+            # this task is still sitting unsynced in the draft.
+            skipped_unchecked.append({"task_id": task["task_id"], "detail": "not marked to sync -- left in the draft, unsynced"})
             continue
         list_name = overrides.get(task["task_id"]) or task["task_list_name"]
         if not list_name:
@@ -316,7 +336,10 @@ def sync_draft_route(draft_id: str, data: schemas.DraftSyncRequest, conn: sqlite
     if all(t["task_synced"] or not t["task_checked"] for t in updated_draft["tasks"]):
         crud.set_draft_status(conn, draft_id, "synced")
         updated_draft = crud.get_draft(conn, draft_id)
-    return {"draft": updated_draft, "results": results, "new_list_results": new_list_results}
+    return {
+        "draft": updated_draft, "results": results, "new_list_results": new_list_results,
+        "skipped_unchecked": skipped_unchecked,
+    }
 
 
 # ---------------------------------------------------------------------------
