@@ -686,18 +686,27 @@ def delete_task_step(list_id: str, task_id: str, step_id: str) -> dict:
 
 @mcp.tool()
 def add_task_attachment(
-    list_id: str, task_id: str, image_b64: str,
-    filename: str = "todo-list-photo.jpg", content_type: str = "image/jpeg",
+    list_id: str, task_id: str, file_base64: str, filename: str, content_type: str,
 ) -> dict:
-    """Attaches a photo to an ALREADY-SYNCED Microsoft To Do task --
-    applied IMMEDIATELY, no approval queue (same exception as
-    update_task): get the user's explicit go-ahead in this conversation
-    before calling this. image_b64 is raw base64 image bytes -- NOT a
-    data: URL. Only for a task that already exists in MS To Do (list_id/
-    task_id from list_tasks_in_list, find_tasks_due, or a sync_draft
-    result); a draft's own task photo attaches automatically on
-    sync_draft instead."""
-    payload = {"photo_base64": image_b64, "filename": filename, "content_type": content_type}
+    """Attaches a file of ANY type -- PDF, photo, spreadsheet, whatever --
+    to an ALREADY-SYNCED Microsoft To Do task. This is a generic file
+    attachment, not a photo-only tool: pick filename/content_type to
+    genuinely match the real file (e.g. filename="invoice.pdf",
+    content_type="application/pdf"; there is no default for either, on
+    purpose, so a mismatched type never sneaks through silently). Applied
+    IMMEDIATELY, no approval queue (same exception as update_task): get
+    the user's explicit go-ahead in this conversation before calling this.
+
+    file_base64 must be the actual raw base64-encoded bytes of the real
+    file -- NOT a data: URL, and NOT empty: an empty or malformed value is
+    rejected with a clear 422 before this ever reaches Microsoft Graph, so
+    if this call fails, first double-check that you actually read/encoded
+    the file's real content rather than retrying the same call unchanged.
+
+    Only for a task that already exists in MS To Do (list_id/task_id from
+    list_tasks_in_list, find_tasks_due, or a sync_draft result); a draft's
+    own task photo attaches automatically on sync_draft instead."""
+    payload = {"photo_base64": file_base64, "filename": filename, "content_type": content_type}
     return _api("POST", f"/api/tasks/{list_id}/{task_id}/attachments", json=payload)
 
 

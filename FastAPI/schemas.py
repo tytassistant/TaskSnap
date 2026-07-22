@@ -9,9 +9,11 @@ truth for shape), rather than re-declaring the same fields a second time
 here purely for outbound validation.
 """
 
+import base64
+import binascii
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 TaskKind = Literal["task", "event"]
 DraftSource = Literal["photo", "text", "photo_text"]
@@ -204,6 +206,22 @@ class TaskAttachmentCreate(_StrictModel):
     photo_base64: str
     filename: str = "todo-list-photo.jpg"
     content_type: str = "image/jpeg"
+
+    @field_validator("photo_base64")
+    @classmethod
+    def _photo_base64_must_be_real_content(cls, v: str) -> str:
+        """An empty-but-present photo_base64 passes pydantic's plain `str`
+        check, then reaches Graph as an empty contentBytes -- which Graph
+        rejects with a cryptic "ContentBytes is a required attribute"
+        error surfaced to the caller as a generic 502. Catching it here
+        instead gives a clear 422 before ever contacting Graph."""
+        if not v.strip():
+            raise ValueError("photo_base64 must not be empty -- pass the actual base64-encoded file content")
+        try:
+            base64.b64decode(v, validate=True)
+        except binascii.Error as exc:
+            raise ValueError(f"photo_base64 is not valid base64: {exc}") from exc
+        return v
 
 
 # ---------------------------------------------------------------------------
