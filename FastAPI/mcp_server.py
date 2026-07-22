@@ -689,19 +689,30 @@ def add_task_attachment(
     list_id: str, task_id: str, file_base64: str, filename: str, content_type: str,
 ) -> dict:
     """Attaches a file of ANY type -- PDF, photo, spreadsheet, whatever --
-    to an ALREADY-SYNCED Microsoft To Do task. This is a generic file
-    attachment, not a photo-only tool: pick filename/content_type to
-    genuinely match the real file (e.g. filename="invoice.pdf",
-    content_type="application/pdf"; there is no default for either, on
-    purpose, so a mismatched type never sneaks through silently). Applied
-    IMMEDIATELY, no approval queue (same exception as update_task): get
-    the user's explicit go-ahead in this conversation before calling this.
+    to an ALREADY-SYNCED Microsoft To Do task.
 
-    file_base64 must be the actual raw base64-encoded bytes of the real
-    file -- NOT a data: URL, and NOT empty: an empty or malformed value is
-    rejected with a clear 422 before this ever reaches Microsoft Graph, so
-    if this call fails, first double-check that you actually read/encoded
-    the file's real content rather than retrying the same call unchanged.
+    HOW TO BUILD file_base64, exactly: take the file's raw binary bytes --
+    however you actually have access to them (downloaded from this chat,
+    read from a local path, fetched from a URL, etc.) -- and base64-encode
+    THOSE EXACT BYTES into a plain string. In Python that's literally
+    `base64.b64encode(raw_bytes).decode()`. Concretely, this argument must
+    NOT be: a data: URL (e.g. "data:application/pdf;base64,..."), a file
+    path or filename, the literal word "ContentBytes" or any other
+    placeholder, or an empty string. It must be the real, non-empty
+    base64 text produced by encoding the actual file's bytes -- nothing
+    else. An empty or malformed value is rejected with a clear 422 before
+    this ever reaches Microsoft Graph; if that happens, or if the error
+    mentions "ContentBytes", it means the value you passed didn't decode
+    to real file content -- go back and re-read/re-encode the file itself
+    rather than retrying this call unchanged, which will fail identically.
+
+    This is a generic file attachment, not a photo-only tool: pick
+    filename/content_type to genuinely match the real file (e.g.
+    filename="invoice.pdf", content_type="application/pdf"; there is no
+    default for either, on purpose, so a mismatched type never sneaks
+    through silently). Applied IMMEDIATELY, no approval queue (same
+    exception as update_task): get the user's explicit go-ahead in this
+    conversation before calling this.
 
     Only for a task that already exists in MS To Do (list_id/task_id from
     list_tasks_in_list, find_tasks_due, or a sync_draft result); a draft's

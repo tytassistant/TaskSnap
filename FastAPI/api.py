@@ -507,7 +507,22 @@ def delete_checklist_item_route(list_id: str, task_id: str, item_id: str):
 
 @router.post("/tasks/{list_id}/{task_id}/attachments", tags=["Tasks"], status_code=201)
 def create_task_attachment_route(list_id: str, task_id: str, data: schemas.TaskAttachmentCreate):
-    graph_client.attach_photo(list_id, task_id, data.photo_base64, data.filename, data.content_type)
+    try:
+        graph_client.attach_photo(list_id, task_id, data.photo_base64, data.filename, data.content_type)
+    except graph_client.GraphError as exc:
+        if "contentbytes" in exc.message.lower():
+            # Graph's own error here names its internal field (contentBytes),
+            # not anything the MCP caller ever constructs directly -- translate
+            # it back to add_task_attachment's actual argument name so an agent
+            # doesn't have to go reverse-engineer what "ContentBytes" means.
+            raise graph_client.GraphError(
+                exc.status_code, exc.code,
+                f'{exc.message} -- this means the file_base64 argument to add_task_attachment did not '
+                "contain valid file content once decoded. Re-check that the file was actually read and "
+                "base64-encoded before calling add_task_attachment again; retrying with the same value "
+                "will fail the same way.",
+            ) from exc
+        raise
     return {"attached": True}
 
 
