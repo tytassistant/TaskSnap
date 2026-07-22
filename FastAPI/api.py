@@ -426,6 +426,19 @@ def delete_checklist_item_route(list_id: str, task_id: str, item_id: str):
 
 
 # ---------------------------------------------------------------------------
+# Attachments on an already-synced task. Reached only via the pending-action
+# approval replay (decision 3) -- attaching a file to an already-real task
+# is gated the same as update_synced_task_route/create_checklist_item_route.
+# ---------------------------------------------------------------------------
+
+
+@router.post("/tasks/{list_id}/{task_id}/attachments", tags=["Tasks"], status_code=201)
+def create_task_attachment_route(list_id: str, task_id: str, data: schemas.TaskAttachmentCreate):
+    graph_client.attach_photo(list_id, task_id, data.photo_base64, data.filename, data.content_type)
+    return {"attached": True}
+
+
+# ---------------------------------------------------------------------------
 # pending_action_table (decision 3) -- fully implemented, self-contained
 # ---------------------------------------------------------------------------
 

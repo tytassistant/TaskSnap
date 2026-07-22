@@ -185,6 +185,14 @@ class ChecklistItemUpdate(_StrictModel):
     is_checked: bool
 
 
+class TaskAttachmentCreate(_StrictModel):
+    """Body of the queued POST .../attachments action -- attaching a file
+    to an already-real task is gated the same as SyncedTaskUpdate."""
+    photo_base64: str
+    filename: str = "todo-list-photo.jpg"
+    content_type: str = "image/jpeg"
+
+
 # ---------------------------------------------------------------------------
 # pending_action_table
 # ---------------------------------------------------------------------------

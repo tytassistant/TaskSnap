@@ -587,6 +587,23 @@ def delete_task_step(list_id: str, task_id: str, step_id: str) -> dict:
 
 
 @mcp.tool()
+def add_task_attachment(
+    list_id: str, task_id: str, image_b64: str,
+    filename: str = "todo-list-photo.jpg", content_type: str = "image/jpeg",
+) -> dict:
+    """Queues attaching a photo to an ALREADY-SYNCED Microsoft To Do task
+    for HUMAN APPROVAL -- nothing changes until the user approves it
+    (Settings -> Pending Approvals). image_b64 is raw base64 image bytes
+    -- NOT a data: URL. Only for a task that already exists in MS To Do
+    (list_id/task_id from list_tasks_in_list, find_tasks_due, or a
+    sync_draft result); a draft's own task photo attaches automatically
+    on sync_draft instead."""
+    payload = {"photo_base64": image_b64, "filename": filename, "content_type": content_type}
+    summary = f"Attach photo to task {task_id} in list {list_id}"
+    return _queue(summary, "POST", f"/api/tasks/{list_id}/{task_id}/attachments", payload)
+
+
+@mcp.tool()
 def check_pending_action(pending_id: Optional[str] = None) -> Any:
     """Status of a queued update_task/delete_task action (or, with no id,
     every still-pending one). status 'pending' = the user hasn't decided
