@@ -11,15 +11,20 @@ TASKSNAP_API_URL) -- no business logic here. Extraction rules and shaping
 (crud.py) all live behind the API, so this server can never drift from
 what the GUI does.
 
-Human-in-the-loop (decision 3): editing/deleting an ALREADY-SYNCED
-Microsoft To Do task queues a pending action for human approval (Settings
--> Pending Approvals) -- same pattern as portfolio-management. Draft
-mutations (add/edit/delete) are immediate instead: a draft hasn't touched
-MS Graph yet, so editing one has zero external blast radius. sync_draft is
-the one draft action that DOES touch Graph (a create, per decision 3 --
-low blast-radius, no approval queue) -- its docstring tells the agent to
-get the user's explicit go-ahead in conversation first, since that's the
-only safeguard for that specific call.
+Human-in-the-loop (decision 3): deleting an ALREADY-SYNCED Microsoft To Do
+task or checklist item (delete_task/delete_task_step) queues a pending
+action for human approval (Settings -> Pending Approvals) -- same pattern
+as portfolio-management, reserved for the one class of action an approval
+click can't be second-guessed on: an already-real deletion. Every other
+mutation of an already-synced task (update_task, add_task_step,
+update_task_step, add_task_attachment) is immediate instead, on the same
+exception as sync_draft/add_draft_new_list and draft mutations generally:
+low blast-radius, easily corrected by another call, so the only safeguard
+is the agent getting the user's explicit go-ahead in conversation first --
+each of those tools' own docstring says so. Draft mutations (add/edit/
+delete, plus add_draft_new_list) are immediate for a different reason: a
+draft (or a pending new list on one) hasn't touched MS Graph yet, so
+editing one has zero external blast radius until sync_draft runs.
 
 Run manually for a smoke test:  python3 mcp_server.py
 Register with Claude Code:      claude mcp add tasksnap -- python3 /path/to/mcp_server.py
@@ -103,10 +108,13 @@ def _api(
 
 
 def _queue(summary: str, method: str, path: str, payload: Optional[dict] = None) -> dict:
-    """Decision 3's approval queue -- used only by update_task/delete_task
-    below (editing/deleting an ALREADY-SYNCED MS To Do task). Draft
-    mutations never go through this: nothing has touched MS Graph at that
-    point, so there's nothing external to protect against."""
+    """Decision 3's approval queue -- used only by delete_task/
+    delete_task_step below (deleting an ALREADY-SYNCED MS To Do task or
+    checklist item; that class of action keeps the formal approval click).
+    Every other already-synced-task mutation calls _api directly instead,
+    relying on in-conversation confirmation only. Draft mutations never go
+    through this either: nothing has touched MS Graph at that point, so
+    there's nothing external to protect against."""
     action = _api("POST", "/api/pending-actions", json={
         "summary": summary, "method": method, "path": path, "payload": payload,
     })
@@ -556,8 +564,13 @@ def sync_draft(draft_id: str, list_assignments: Optional[dict] = None) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Already-synced MS To Do tasks (decision 3) -- edit/delete queue for human
-# approval, unlike the draft tools above.
+# Already-synced MS To Do tasks (decision 3). update_task/add_task_step/
+# add_task_attachment/update_task_step are immediate -- same exception as
+# sync_draft/add_draft_new_list: get the user's explicit go-ahead in
+# conversation first, since that confirmation is the only safeguard.
+# delete_task/delete_task_step stay queued for HUMAN APPROVAL -- undoing an
+# already-real deletion isn't as simple as undoing an add/edit, so that
+# higher-stakes pair keeps the formal Settings -> Pending Approvals gate.
 # ---------------------------------------------------------------------------
 
 
@@ -568,14 +581,16 @@ def update_task(
     due_datetime: Optional[str] = None, timezone: Optional[str] = None,
     status: Optional[str] = None,
 ) -> dict:
-    """Queues editing an ALREADY-SYNCED Microsoft To Do task for HUMAN
-    APPROVAL -- nothing changes until the user approves it (Settings ->
-    Pending Approvals). Only for a task that already exists in MS To Do
-    (list_id/task_id from a previous sync_draft result or a Graph lookup
-    -- NOT a draft's task_id). For a task still sitting in a draft, use
-    edit_draft_task instead -- that's immediate, no approval needed.
-    status is one of notStarted/inProgress/completed/waitingOnOthers/
-    deferred -- use "completed" to mark done, "notStarted" to reopen."""
+    """Edits an ALREADY-SYNCED Microsoft To Do task -- applied
+    IMMEDIATELY, no approval queue: state exactly what you're about to
+    change and get the user's explicit go-ahead in this conversation
+    before calling this -- that confirmation is the only safeguard in
+    place (same exception as sync_draft/add_draft_new_list). Only for a
+    task that already exists in MS To Do (list_id/task_id from a previous
+    sync_draft result or a Graph lookup -- NOT a draft's task_id). For a
+    task still sitting in a draft, use edit_draft_task instead. status is
+    one of notStarted/inProgress/completed/waitingOnOthers/deferred -- use
+    "completed" to mark done, "notStarted" to reopen."""
     payload = {}
     if title is not None:
         payload["title"] = title
@@ -587,8 +602,7 @@ def update_task(
         payload["timezone"] = timezone
     if status is not None:
         payload["status"] = status
-    summary = f"Edit task {task_id} in list {list_id} -- set {payload}"
-    return _queue(summary, "PATCH", f"/api/tasks/{list_id}/{task_id}", payload)
+    return _api("PATCH", f"/api/tasks/{list_id}/{task_id}", json=payload)
 
 
 @mcp.tool()
@@ -603,20 +617,19 @@ def delete_task(list_id: str, task_id: str) -> dict:
 
 @mcp.tool()
 def add_task_step(list_id: str, task_id: str, display_name: str) -> dict:
-    """Queues adding a checklist item (step) to an ALREADY-SYNCED task for
-    HUMAN APPROVAL -- nothing changes until the user approves it (Settings
-    -> Pending Approvals). Adding a step changes an already-real task, so
-    it's gated the same as update_task/delete_task."""
-    summary = f'Add step "{display_name}" to task {task_id} in list {list_id}'
-    return _queue(summary, "POST", f"/api/tasks/{list_id}/{task_id}/checklist-items", {"display_name": display_name})
+    """Adds a checklist item (step) to an ALREADY-SYNCED task -- applied
+    IMMEDIATELY, no approval queue (same exception as update_task): get
+    the user's explicit go-ahead in this conversation before calling
+    this."""
+    return _api("POST", f"/api/tasks/{list_id}/{task_id}/checklist-items", json={"display_name": display_name})
 
 
 @mcp.tool()
 def update_task_step(list_id: str, task_id: str, step_id: str, is_checked: bool) -> dict:
     """Checks or unchecks a step on an ALREADY-SYNCED task -- applied
-    IMMEDIATELY, no approval needed (unlike update_task/delete_task):
-    toggling a step is low blast-radius and trivially reversed by toggling
-    it back. step_id comes from list_task_steps."""
+    IMMEDIATELY, no approval needed: toggling a step is low blast-radius
+    and trivially reversed by toggling it back. step_id comes from
+    list_task_steps."""
     return _api(
         "PATCH", f"/api/tasks/{list_id}/{task_id}/checklist-items/{step_id}", json={"is_checked": is_checked}
     )
@@ -636,22 +649,22 @@ def add_task_attachment(
     list_id: str, task_id: str, image_b64: str,
     filename: str = "todo-list-photo.jpg", content_type: str = "image/jpeg",
 ) -> dict:
-    """Queues attaching a photo to an ALREADY-SYNCED Microsoft To Do task
-    for HUMAN APPROVAL -- nothing changes until the user approves it
-    (Settings -> Pending Approvals). image_b64 is raw base64 image bytes
-    -- NOT a data: URL. Only for a task that already exists in MS To Do
-    (list_id/task_id from list_tasks_in_list, find_tasks_due, or a
-    sync_draft result); a draft's own task photo attaches automatically
-    on sync_draft instead."""
+    """Attaches a photo to an ALREADY-SYNCED Microsoft To Do task --
+    applied IMMEDIATELY, no approval queue (same exception as
+    update_task): get the user's explicit go-ahead in this conversation
+    before calling this. image_b64 is raw base64 image bytes -- NOT a
+    data: URL. Only for a task that already exists in MS To Do (list_id/
+    task_id from list_tasks_in_list, find_tasks_due, or a sync_draft
+    result); a draft's own task photo attaches automatically on
+    sync_draft instead."""
     payload = {"photo_base64": image_b64, "filename": filename, "content_type": content_type}
-    summary = f"Attach photo to task {task_id} in list {list_id}"
-    return _queue(summary, "POST", f"/api/tasks/{list_id}/{task_id}/attachments", payload)
+    return _api("POST", f"/api/tasks/{list_id}/{task_id}/attachments", json=payload)
 
 
 @mcp.tool()
 def check_pending_action(pending_id: Optional[str] = None) -> Any:
-    """Status of a queued update_task/delete_task action (or, with no id,
-    every still-pending one). status 'pending' = the user hasn't decided
+    """Status of a queued delete_task/delete_task_step action (or, with no
+    id, every still-pending one). status 'pending' = the user hasn't decided
     yet. 'approved' with pending_result null = approved and still
     executing -- poll again; 'approved' with pending_result set = done,
     the API response is in it. 'rejected' = the user declined it.
