@@ -706,6 +706,10 @@ def add_task_attachment(
     to real file content -- go back and re-read/re-encode the file itself
     rather than retrying this call unchanged, which will fail identically.
 
+    For files 3 MB or larger, Microsoft Graph rejects this base64 path
+    outright -- use get_task_attachment_upload_url instead, which needs no
+    encoding and supports files up to 25 MB via a plain file upload.
+
     This is a generic file attachment, not a photo-only tool: pick
     filename/content_type to genuinely match the real file (e.g.
     filename="invoice.pdf", content_type="application/pdf"; there is no
@@ -719,6 +723,53 @@ def add_task_attachment(
     own task photo attaches automatically on sync_draft instead."""
     payload = {"photo_base64": file_base64, "filename": filename, "content_type": content_type}
     return _api("POST", f"/api/tasks/{list_id}/{task_id}/attachments", json=payload)
+
+
+@mcp.tool()
+def get_task_attachment_upload_url(list_id: str, task_id: str, filename: str, content_type: str) -> dict:
+    """Mints a single-use upload link for attaching a file to an ALREADY-
+    SYNCED Microsoft To Do task. Use THIS tool, not add_task_attachment,
+    whenever EITHER is true: (1) the file is 3 MB or larger
+    (add_task_attachment's base64 path is hard-capped under 3 MB by
+    Microsoft Graph -- it will be rejected there regardless of how it's
+    encoded), or (2) you cannot easily produce valid base64 of the file's
+    exact bytes yourself. If your file is under 3 MB and you CAN produce
+    base64 without friction, use add_task_attachment instead -- it's one
+    tool call instead of two steps.
+
+    This tool sends NO file bytes and does NO encoding of any kind -- it
+    only returns a plain upload_url; you still have to actually upload the
+    file to it as a second step (see below), which needs no base64 and no
+    script.
+
+    After calling this, perform a normal HTTP file upload: a
+    multipart/form-data POST of the raw file to upload_url, with the file
+    in a field named "file" -- the same kind of thing as a browser's
+    <input type="file"> form submit, NOT a script, NOT code execution, and
+    NOT base64 text in a JSON body. Example from a shell:
+    `curl -F "file=@/path/to/file.pdf" "<upload_url>"`. Use whatever plain
+    multipart-upload capability your own platform offers for "upload this
+    file to this URL" -- not anything that runs code.
+
+    upload_url is SINGLE-USE and expires at expires_datetime_utc (15
+    minutes from now): if the upload doesn't happen in time, fails
+    partway, or you already used it, do not retry the same upload_url --
+    call this tool again for a fresh one.
+
+    filename/content_type must genuinely match the real file (e.g.
+    filename="invoice.pdf", content_type="application/pdf") -- there is no
+    default for either, on purpose. File can be anything from 3 MB up to
+    Microsoft Graph's 25 MB per-task-attachment ceiling (larger files are
+    rejected with a clear error, not silently truncated).
+
+    Only for a task that already exists in MS To Do (list_id/task_id from
+    list_tasks_in_list, find_tasks_due, or a sync_draft result); a draft's
+    own task photo attaches automatically on sync_draft instead. Get the
+    user's explicit go-ahead in this conversation before calling this --
+    same exception as update_task/add_task_attachment (applied immediately
+    once the upload completes, no approval queue)."""
+    payload = {"filename": filename, "content_type": content_type}
+    return _api("POST", f"/api/tasks/{list_id}/{task_id}/attachments/upload-requests", json=payload)
 
 
 @mcp.tool()

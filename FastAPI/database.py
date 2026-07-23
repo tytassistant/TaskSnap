@@ -151,6 +151,31 @@ TABLE_DDL = [
         pending_decided_datetime_UTC TEXT
     )
     """,
+    # Single-use, short-lived tokens minted for a remote LAN MCP client that
+    # cannot/won't base64-encode a file itself
+    # (get_task_attachment_upload_url). upload_token IS the primary key --
+    # it doubles as the sole credential for POST /api/uploads/{token}, which
+    # is deliberately AuthGuard-exempt (main.py), so it's generated via
+    # secrets.token_urlsafe, not helpers.generate_id like every other table's
+    # id. Four states, not pending_action_table's three: pending -> claimed
+    # (reserved atomically the instant redemption starts, before the Graph
+    # call) -> completed|failed -- the extra 'claimed' state closes the race
+    # window between "check token is valid" and "do the Graph upload."
+    """
+    CREATE TABLE IF NOT EXISTS attachment_upload_table (
+        upload_token TEXT PRIMARY KEY,
+        upload_list_id TEXT NOT NULL,
+        upload_task_id TEXT NOT NULL,
+        upload_filename TEXT NOT NULL,
+        upload_content_type TEXT NOT NULL,
+        upload_status TEXT NOT NULL DEFAULT 'pending'
+            CHECK (upload_status IN ('pending', 'claimed', 'completed', 'failed')),
+        upload_result TEXT,
+        upload_create_datetime_UTC TEXT NOT NULL,
+        upload_expires_datetime_UTC TEXT NOT NULL,
+        upload_completed_datetime_UTC TEXT
+    )
+    """,
 ]
 
 ALL_TABLES = [
@@ -162,6 +187,7 @@ ALL_TABLES = [
     "draft_task_table",
     "draft_new_list_table",
     "pending_action_table",
+    "attachment_upload_table",
 ]
 
 # draft_task/draft_new_list lookups are always "all rows for this draft" --

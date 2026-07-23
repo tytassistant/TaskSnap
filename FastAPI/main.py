@@ -69,7 +69,14 @@ app.include_router(api_router)
 API_KEY = helpers.get_api_key()
 
 _AUTH_EXEMPT_PATHS = {"/login", "/health"}
-_AUTH_EXEMPT_PREFIXES = ("/static/",)
+# /api/uploads/ (trailing slash deliberate, so this can never accidentally
+# also exempt some future unrelated /api/upload-something route): the
+# get_task_attachment_upload_url redemption route (api.py) authenticates
+# solely via the single-use, short-lived token in its own URL path -- the
+# remote LAN MCP client redeeming it has neither an X-API-Key nor a session
+# cookie. The token-minting route stays under normal AuthGuard; only
+# redemption is exempt.
+_AUTH_EXEMPT_PREFIXES = ("/static/", "/api/uploads/")
 
 
 def _db_check(fn, *args) -> bool:

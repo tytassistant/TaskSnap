@@ -309,3 +309,55 @@ def attach_photo(
         timeout=30,
     )
     _raise_for_graph_error(resp)
+
+
+_UPLOAD_SESSION_CHUNK_SIZE = 3 * 1024 * 1024 + 512 * 1024  # ~3.5MB, safely under Graph's <4MB-per-PUT ceiling
+
+
+def attach_file_via_upload_session(
+    list_id: str, task_id: str, file_bytes: bytes, filename: str, content_type: str,
+) -> dict:
+    """Large/generic-file attachment path via Graph's createUploadSession
+    (docs: https://learn.microsoft.com/en-us/graph/todo-attachments), NOT
+    attach_photo's <3MB base64 contentBytes POST. Used only by
+    /api/uploads/{token} (api.py's token-redemption route) -- the caller
+    there has already read the raw bytes server-side, so nothing here is
+    ever base64-encoded. Works for any size 0-25MB, Graph's hard ceiling for
+    To Do task attachments either way.
+
+    Each PUT still needs the bearer token (Graph's docs list Authorization
+    as required for the chunk uploads too, not just session creation) --
+    reuse _headers(), just override Content-Type for the octet-stream body.
+
+    Returns {"attachment_id": ..., "location": ...} parsed from the final
+    PUT's Location response header."""
+    size = len(file_bytes)
+    resp = requests.post(
+        f"{GRAPH_BASE}/lists/{list_id}/tasks/{task_id}/attachments/createUploadSession",
+        headers=_headers(),
+        json={"attachmentInfo": {"attachmentType": "file", "name": filename, "size": size}},
+        timeout=30,
+    )
+    _raise_for_graph_error(resp)
+    # Docs confirm the PUT target is uploadUrl + "/content", not uploadUrl itself.
+    content_url = f"{resp.json()['uploadUrl']}/content"
+
+    start, location = 0, None
+    while True:
+        end = min(start + _UPLOAD_SESSION_CHUNK_SIZE, size) - 1 if size else 0
+        chunk = file_bytes[start:end + 1]
+        headers = _headers()
+        headers["Content-Type"] = "application/octet-stream"
+        headers["Content-Length"] = str(len(chunk))
+        headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+        put_resp = requests.put(content_url, headers=headers, data=chunk, timeout=120)
+        if put_resp.status_code == 201:
+            location = put_resp.headers.get("Location")
+            break
+        if put_resp.status_code != 200:
+            _raise_for_graph_error(put_resp)
+        start = end + 1
+        if size == 0:
+            break  # zero-byte file -- single PUT, no natural loop exit otherwise
+
+    return {"attachment_id": location.rsplit("/", 1)[-1] if location else None, "location": location}

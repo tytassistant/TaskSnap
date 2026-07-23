@@ -32,6 +32,12 @@ router = APIRouter(prefix="/api")
 # tasksnap.service on 8004); override only if that port ever changes.
 SELF_BASE = os.environ.get("TASKSNAP_SELF_URL", "http://127.0.0.1:8004").rstrip("/")
 
+# LAN-reachable base handed to a remote LAN-only MCP client for the
+# single-use upload link (get_task_attachment_upload_url) -- deliberately
+# NOT auth_ms.BASE_URL (that's the public duckdns domain, only used for the
+# MS OAuth redirect). Override if this VM's LAN IP or port ever changes.
+LAN_BASE = os.environ.get("TASKSNAP_LAN_URL", "http://192.168.1.60:8004").rstrip("/")
+
 
 def get_db():
     conn = database.get_connection()
@@ -524,6 +530,82 @@ def create_task_attachment_route(list_id: str, task_id: str, data: schemas.TaskA
             ) from exc
         raise
     return {"attached": True}
+
+
+@router.post("/tasks/{list_id}/{task_id}/attachments/upload-requests", tags=["Tasks"], status_code=201)
+def create_attachment_upload_request_route(
+    list_id: str, task_id: str, data: schemas.AttachmentUploadRequestCreate,
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """Mints a single-use, 15-minute upload token + a plain LAN URL for
+    get_task_attachment_upload_url -- the MCP tool for a caller that can't
+    or won't base64-encode a file itself. Requires normal AuthGuard auth
+    like every other /api/ route -- only the redemption route below is
+    auth-exempt; minting a token still requires being a trusted caller
+    (MCP's X-API-Key or a logged-in browser session)."""
+    upload = crud.create_attachment_upload(
+        conn, list_id=list_id, task_id=task_id, filename=data.filename, content_type=data.content_type,
+    )
+    return {
+        "upload_token": upload["upload_token"],
+        "upload_url": f"{LAN_BASE}/api/uploads/{upload['upload_token']}",
+        "expires_datetime_utc": upload["upload_expires_datetime_UTC"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Attachment upload tokens (get_task_attachment_upload_url). Deliberately
+# NOT gated by AuthGuard (main.py._AUTH_EXEMPT_PREFIXES) -- the remote LAN
+# MCP client redeeming this has neither X-API-Key nor a session cookie; the
+# single-use, short-lived, cryptographically random token in the URL path
+# IS the authentication.
+# ---------------------------------------------------------------------------
+
+
+def _claim_attachment_upload_or_error(conn: sqlite3.Connection, token: str) -> dict:
+    upload = crud.get_attachment_upload(conn, token)
+    if upload is None:
+        raise HTTPException(status_code=404, detail="upload token not found")
+    if upload["upload_status"] != "pending":
+        raise HTTPException(status_code=410, detail=f"upload token already {upload['upload_status']}")
+    if helpers.utc_now_iso() > upload["upload_expires_datetime_UTC"]:
+        crud.record_attachment_upload_result(conn, token, "failed", {"detail": "expired before redemption"})
+        raise HTTPException(status_code=410, detail="upload token expired -- request a new one")
+    claimed = crud.claim_attachment_upload(conn, token)
+    if claimed is None:
+        raise HTTPException(status_code=410, detail="upload token already used")
+    return claimed
+
+
+@router.post("/uploads/{token}", tags=["Uploads"])
+async def redeem_attachment_upload_route(
+    token: str, file: UploadFile = File(...), conn: sqlite3.Connection = Depends(get_db),
+):
+    """Redeems a single-use token from get_task_attachment_upload_url:
+    accepts a plain multipart/form-data file upload (no base64, no JSON) and
+    does the actual Microsoft Graph attachment via
+    graph_client.attach_file_via_upload_session (createUploadSession +
+    chunked PUT -- NOT the <3MB base64 contentBytes path used by
+    create_task_attachment_route). AuthGuard-exempt on purpose (main.py) --
+    the token in the URL is the only credential."""
+    claimed = _claim_attachment_upload_or_error(conn, token)
+    raw = await file.read()
+    if len(raw) > 25 * 1024 * 1024:
+        crud.record_attachment_upload_result(conn, token, "failed", {"detail": "file exceeds 25MB limit"})
+        raise HTTPException(
+            status_code=413, detail="file exceeds Microsoft Graph's 25MB per-task-attachment limit"
+        )
+    try:
+        result = graph_client.attach_file_via_upload_session(
+            claimed["upload_list_id"], claimed["upload_task_id"], raw,
+            filename=file.filename or claimed["upload_filename"],
+            content_type=file.content_type or claimed["upload_content_type"],
+        )
+    except graph_client.GraphError as exc:
+        crud.record_attachment_upload_result(conn, token, "failed", {"detail": str(exc)})
+        raise
+    crud.record_attachment_upload_result(conn, token, "completed", result)
+    return {"attached": True, **result}
 
 
 # ---------------------------------------------------------------------------

@@ -224,6 +224,24 @@ class TaskAttachmentCreate(_StrictModel):
         return v
 
 
+class AttachmentUploadRequestCreate(_StrictModel):
+    """Body of POST /api/tasks/{list_id}/{task_id}/attachments/upload-requests
+    -- mints a single-use token/URL for get_task_attachment_upload_url (the
+    LAN plain-file-upload path for files >=3MB, or whenever the caller can't
+    self-encode base64). No default for either field, same reasoning as
+    TaskAttachmentCreate's filename/content_type: a mismatched type should
+    never silently slip through."""
+    filename: str
+    content_type: str
+
+    @field_validator("filename", "content_type")
+    @classmethod
+    def _must_not_be_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("must not be empty")
+        return v
+
+
 # ---------------------------------------------------------------------------
 # pending_action_table
 # ---------------------------------------------------------------------------

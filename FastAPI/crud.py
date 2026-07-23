@@ -14,7 +14,9 @@ and §5 (data model) for the design this implements.
 """
 
 import json
+import secrets
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import database
@@ -774,3 +776,86 @@ def record_pending_action_result(conn: sqlite3.Connection, pending_id: str, stat
     )
     conn.commit()
     return get_pending_action(conn, pending_id)
+
+
+# ---------------------------------------------------------------------------
+# attachment_upload_table -- single-use upload tokens for
+# get_task_attachment_upload_url (mcp_server.py), redeemed by a plain
+# multipart POST to /api/uploads/{token} (api.py), which is deliberately
+# AuthGuard-exempt: the token here is the only credential that route checks.
+# ---------------------------------------------------------------------------
+
+_ATTACHMENT_UPLOAD_TTL_SECONDS = 900  # 15 minutes
+
+
+def create_attachment_upload(
+    conn: sqlite3.Connection, list_id: str, task_id: str, filename: str, content_type: str,
+) -> dict:
+    """Mints a single-use token -- secrets.token_urlsafe (256 bits), not
+    helpers.generate_id like every other table's id, since this one doubles
+    as the redemption route's sole credential rather than an opaque
+    reference. Size isn't known yet (no bytes have arrived) -- only
+    filename/content_type; the real attachmentInfo.size Graph needs is
+    computed from the actual uploaded bytes once redeemed."""
+    token = secrets.token_urlsafe(32)
+    now = helpers.utc_now_iso()
+    expires = (
+        datetime.now(timezone.utc) + timedelta(seconds=_ATTACHMENT_UPLOAD_TTL_SECONDS)
+    ).isoformat(timespec="seconds")
+    conn.execute(
+        """
+        INSERT INTO attachment_upload_table
+            (upload_token, upload_list_id, upload_task_id, upload_filename, upload_content_type,
+             upload_status, upload_create_datetime_UTC, upload_expires_datetime_UTC)
+        VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
+        """,
+        (token, list_id, task_id, filename, content_type, now, expires),
+    )
+    conn.commit()
+    return get_attachment_upload(conn, token)
+
+
+def _attachment_upload_row_to_dict(row: sqlite3.Row) -> dict:
+    d = dict(row)
+    if d["upload_result"] is not None:
+        d["upload_result"] = json.loads(d["upload_result"])
+    return d
+
+
+def get_attachment_upload(conn: sqlite3.Connection, token: str) -> Optional[dict]:
+    row = conn.execute(
+        "SELECT * FROM attachment_upload_table WHERE upload_token = ?", (token,)
+    ).fetchone()
+    return _attachment_upload_row_to_dict(row) if row else None
+
+
+def claim_attachment_upload(conn: sqlite3.Connection, token: str) -> Optional[dict]:
+    """Atomically moves a token pending -> claimed -- the WHERE clause
+    guards against two concurrent redeem requests for the same token both
+    proceeding. Returns None (not a raise) if the row wasn't 'pending' at
+    the moment of the UPDATE -- api.py already does its own not-found/
+    expired/already-used checks before calling this, so None here means a
+    genuine race lost, which api.py maps to its own 410."""
+    cur = conn.execute(
+        "UPDATE attachment_upload_table SET upload_status = 'claimed' "
+        "WHERE upload_token = ? AND upload_status = 'pending'",
+        (token,),
+    )
+    conn.commit()
+    return get_attachment_upload(conn, token) if cur.rowcount else None
+
+
+def record_attachment_upload_result(conn: sqlite3.Connection, token: str, status: str, result: dict) -> dict:
+    """Terminal state after a redeem attempt -- 'completed' (Graph upload
+    succeeded) or 'failed' (oversized file, GraphError, or expiry caught
+    late). Single-use is enforced by this: once written, the token can
+    never be claimed again (claim_attachment_upload's status check)."""
+    if status not in ("completed", "failed"):
+        raise helpers.ValidationError(f"Invalid attachment-upload result status '{status}'")
+    conn.execute(
+        "UPDATE attachment_upload_table SET upload_status = ?, upload_result = ?, "
+        "upload_completed_datetime_UTC = ? WHERE upload_token = ?",
+        (status, json.dumps(result, default=str), helpers.utc_now_iso(), token),
+    )
+    conn.commit()
+    return get_attachment_upload(conn, token)
