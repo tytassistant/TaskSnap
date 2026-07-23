@@ -266,6 +266,13 @@ async def redeem_photo_extraction_upload_route(
         crud.record_photo_extraction_upload_result(conn, token, "failed", {"detail": str(exc)})
         raise
     crud.record_photo_extraction_upload_result(conn, token, "completed", {"draft_id": draft["draft_id"]})
+    # Renamed the same way mcp_server.py's _shape_draft_task renames it for
+    # every OTHER response path -- this is the one response that reaches an
+    # external caller directly, bypassing that shaping layer entirely, so
+    # without this it would be the only place still showing task_checked
+    # instead of to_sync.
+    for t in draft["tasks"]:
+        t["to_sync"] = t.pop("task_checked")
     return draft
 
 

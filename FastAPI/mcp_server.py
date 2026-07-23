@@ -361,10 +361,10 @@ def extract_tasks(
     base64 image bytes -- NOT a data: URL, this tool adds that prefix
     itself) or text.
 
-    If you can't reliably reproduce a photo's exact bytes as base64 (e.g.
-    a large photo, or a platform that regenerates/retypes the base64
-    rather than passing it through untouched -- this silently corrupts
-    it), use get_photo_extraction_upload_url instead.
+    If a photo's base64 can't be produced reliably (a large file, or a
+    platform that regenerates/retypes it rather than passing it through
+    untouched), use get_photo_extraction_upload_url instead -- see its
+    docstring for why this happens.
 
     filename (optional, e.g. "IMG-20260723-WA0038.jpg"): if the photo's
     draft ends up auto-attached to its Microsoft To Do task on
@@ -386,15 +386,13 @@ def extract_tasks(
     household list" is recognized automatically -- no separate call
     needed.
 
-    Each task's to_sync reflects the app's own default-selection rules
-    (date-specific tasks, or tasks the AI confidently routed to a list,
-    default to_sync=True when the input was photo-only; everything
-    defaults to_sync=True when any text was given) -- treat this as a
-    starting point, but the user's own instructions in this conversation
-    take precedence over it. to_sync is NOT a completion status -- it only
-    controls whether sync_draft will create this task in Microsoft To Do
-    at all; a task with to_sync=False just means "still under review,
-    don't sync it yet."
+    Each task's to_sync is the app's own suggested default (not something
+    to trust blindly) -- review it like anything else in the draft, and
+    adjust via edit_draft_task/add_draft_task if it doesn't match what
+    the user actually wants. to_sync is NOT a completion status -- it
+    only controls whether sync_draft will create this task in Microsoft
+    To Do at all; a task with to_sync=False just means "still under
+    review, don't sync it yet."
 
     timezone affects both how due dates are interpreted and what's sent to
     Microsoft To Do at sync time -- omit it to use the app's configured
@@ -463,16 +461,13 @@ def get_photo_extraction_upload_url(
 
     The upload runs the full AI extraction before responding (this can
     take a while, same as extract_tasks) and returns the finished draft
-    directly in the response -- if your platform's upload mechanism shows
-    you that response, you're done (note: this raw response has each
-    task's raw task_checked field, not the to_sync field extract_tasks/
-    get_draft normally show you -- same meaning, just unrenamed). If your
-    platform doesn't show you the upload's response, or you're unsure,
-    call check_photo_extraction_upload with the same upload_token instead
-    of guessing -- its result IS reshaped the same way extract_tasks/
-    get_draft are (to_sync and all). Either way, ALWAYS present the
-    resulting tasks back to the user before calling sync_draft; never
-    sync silently, same rule as extract_tasks.
+    directly in the response, in the same shape extract_tasks/get_draft
+    return -- if your platform's upload mechanism shows you that
+    response, you're done. If it doesn't, or you're unsure, call
+    check_photo_extraction_upload with the same upload_token instead of
+    guessing. Either way, ALWAYS present the resulting tasks back to the
+    user before calling sync_draft; never sync silently, same rule as
+    extract_tasks.
 
     upload_url is SINGLE-USE and expires at expires_datetime_utc (15
     minutes from now): if the upload doesn't happen in time, fails
@@ -820,9 +815,8 @@ def add_task_attachment(
     to real file content -- go back and re-read/re-encode the file itself
     rather than retrying this call unchanged, which will fail identically.
 
-    For files 3 MB or larger, Microsoft Graph rejects this base64 path
-    outright -- use get_task_attachment_upload_url instead, which needs no
-    encoding and supports files up to 25 MB via a plain file upload.
+    For files 3 MB or larger, use get_task_attachment_upload_url instead
+    -- see its docstring for the size limits and why.
 
     This is a generic file attachment, not a photo-only tool: pick
     filename/content_type to genuinely match the real file (e.g.
