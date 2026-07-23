@@ -166,8 +166,10 @@ def _build_task_body(
         if normalized:
             task_body["dueDateTime"] = {"dateTime": normalized, "timeZone": timezone}
     if reminder_datetime is not None:
-        task_body["isReminderOn"] = True
-        task_body["reminderDateTime"] = {"dateTime": reminder_datetime, "timeZone": timezone}
+        normalized_reminder = normalize_datetime_for_graph(reminder_datetime)
+        if normalized_reminder:
+            task_body["isReminderOn"] = True
+            task_body["reminderDateTime"] = {"dateTime": normalized_reminder, "timeZone": timezone}
     if status is not None:
         task_body["status"] = status
     return task_body
