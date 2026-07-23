@@ -86,6 +86,21 @@ def update_settings_route(data: schemas.SettingsUpdate, conn: sqlite3.Connection
     return crud.update_settings(conn, **data.model_dump(exclude_unset=True))
 
 
+@router.get("/settings/prompt-preview", tags=["Settings"])
+def get_prompt_preview_route(conn: sqlite3.Connection = Depends(get_db)):
+    """Renders both extraction-prompt variants exactly as they'd be sent to
+    Poe right now, via the same poe_client.build_prompt_previews() the real
+    extraction path's builders back onto -- so this can never show stale or
+    hypothetical prompt text, only what a real extract_tasks call would
+    actually send given current settings/list_table."""
+    settings = crud.get_settings(conn)
+    list_entries = crud.list_all_list_entries(conn)
+    return poe_client.build_prompt_previews(
+        list_entries, settings["default_category"], settings["list_override_rules"],
+        settings["extraction_custom_instructions"], settings["default_timezone"],
+    )
+
+
 # ---------------------------------------------------------------------------
 # Extraction (decision 8) -- depends on poe_client.py, not yet built
 # ---------------------------------------------------------------------------
@@ -186,6 +201,7 @@ def _run_extraction_and_create_draft(
     result = poe_client.extract(
         image_data_url, text, tz, list_entries,
         settings["default_category"], settings["list_override_rules"],
+        settings["extraction_custom_instructions"],
     )
 
     if image_data_url is not None and (text or "").strip():

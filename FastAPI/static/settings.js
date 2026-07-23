@@ -228,9 +228,19 @@ $id("addListEntryBtn").addEventListener("click", function() {
 async function loadSettings() {
   var settings = await apiFetch("/api/settings");
   $id("listOverrideRules").value = listToLines(settings.list_override_rules);
+  $id("extractionCustomInstructions").value = settings.extraction_custom_instructions || "";
   populateTimezoneSelect(settings.default_timezone);
   _lastKnownDefaultCategory = settings.default_category || null;
   return settings;
+}
+
+// Read-only, always-accurate render of the actual prompt(s) extract_tasks
+// would send right now -- backed by the same poe_client.build_prompt_previews()
+// the real extraction call uses, so it can't drift from reality.
+async function loadPromptPreview() {
+  var preview = await apiFetch("/api/settings/prompt-preview");
+  $id("promptPreviewImage").value = preview.image_prompt;
+  $id("promptPreviewText").value = preview.text_prompt;
 }
 
 async function loadMsStatus() {
@@ -255,6 +265,7 @@ $id("saveBtn").addEventListener("click", function() {
     list_override_rules: linesToList($id("listOverrideRules").value),
     default_timezone: $id("defaultTimezone").value,
     default_category: $id("defaultCategory").value,
+    extraction_custom_instructions: $id("extractionCustomInstructions").value,
   };
   apiFetch("/api/settings", {
     method: "PATCH",
@@ -264,6 +275,7 @@ $id("saveBtn").addEventListener("click", function() {
     .then(function() {
       _lastKnownDefaultCategory = payload.default_category;
       showToast("Settings saved", "success");
+      return loadPromptPreview();
     })
     .catch(function(err) { showToast("Could not save settings: " + err.message, "error"); });
 });
@@ -274,6 +286,7 @@ $id("saveBtn").addEventListener("click", function() {
     var msLists = await apiFetch("/api/lists");
     populateMsListsDatalist(msLists);
     await loadListEntries();
+    await loadPromptPreview();
   } catch (err) {
     showToast("Could not load settings: " + err.message, "error");
   }

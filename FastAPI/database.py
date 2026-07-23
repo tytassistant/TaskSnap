@@ -232,6 +232,7 @@ COLUMN_MIGRATIONS = [
     ("draft_table", "draft_photo_filename", "TEXT"),
     ("draft_table", "draft_photo_content_type", "TEXT"),
     ("photo_extraction_upload_table", "upload_filename", "TEXT"),
+    ("settings_table", "extraction_custom_instructions", "TEXT NOT NULL DEFAULT ''"),
 ]
 
 

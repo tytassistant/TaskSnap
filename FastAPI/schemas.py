@@ -41,6 +41,7 @@ class SettingsUpdate(_StrictModel):
     list_override_rules: Optional[list[str]] = None
     default_timezone: Optional[str] = None
     default_category: Optional[str] = None
+    extraction_custom_instructions: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------

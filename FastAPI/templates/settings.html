@@ -73,6 +73,31 @@
     </div>
   </div>
 
+  <!-- Extraction prompt -->
+  <div class="card">
+    <div class="card-title">Extraction prompt</div>
+    <div class="card-desc">
+      Instructions here are added to every AI extraction request (photo or text), on top of the
+      app's built-in parsing rules — e.g. "My kids are Theo and Mia" or "Always mark items already
+      checked off as done."
+    </div>
+    <div class="field">
+      <label>Additional instructions</label>
+      <textarea id="extractionCustomInstructions" rows="4" placeholder="e.g. My kids are Theo and Mia"></textarea>
+    </div>
+    <details class="field">
+      <summary style="cursor:pointer;">Preview the full prompt sent to the AI</summary>
+      <div style="margin-top:10px;">
+        <label>Photo prompt</label>
+        <textarea id="promptPreviewImage" rows="14" readonly style="font-family:monospace; font-size:12px;"></textarea>
+      </div>
+      <div style="margin-top:10px;">
+        <label>Text-only prompt</label>
+        <textarea id="promptPreviewText" rows="14" readonly style="font-family:monospace; font-size:12px;"></textarea>
+      </div>
+    </details>
+  </div>
+
   <!-- Manage lists (list_table refactor) -->
   <div class="card">
     <div class="card-title">Manage lists</div>

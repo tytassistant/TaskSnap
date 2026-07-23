@@ -209,7 +209,10 @@ _ITEM_CONTRACT = (
 )
 
 
-def build_image_prompt(today: str, list_entries: list, default_category: str, list_override_rules: list) -> str:
+def build_image_prompt(
+    today: str, list_entries: list, default_category: str, list_override_rules: list,
+    custom_instructions: str = "",
+) -> str:
     lines = [
         f"Analyze this image carefully. Today's date is: {today}",
         "",
@@ -289,12 +292,19 @@ def build_image_prompt(today: str, list_entries: list, default_category: str, li
         "",
     ]
     lines.extend(_available_lists_block(list_entries, default_category, list_override_rules))
+    if custom_instructions:
+        lines.append("=== ADDITIONAL INSTRUCTIONS FROM THE USER ===")
+        lines.append(custom_instructions)
+        lines.append("")
     lines.append("=== IMPORTANT ===")
     lines.append("Return ONLY a valid JSON object (no other text, no markdown code blocks).")
     return "\n".join(lines)
 
 
-def build_text_prompt(today: str, list_entries: list, default_category: str, list_override_rules: list) -> str:
+def build_text_prompt(
+    today: str, list_entries: list, default_category: str, list_override_rules: list,
+    custom_instructions: str = "",
+) -> str:
     lines = [
         f"The user wants to create tasks based on the following natural language input. Today's date "
         f"is {today}.",
@@ -338,9 +348,31 @@ def build_text_prompt(today: str, list_entries: list, default_category: str, lis
         "",
     ]
     lines.extend(_available_lists_block(list_entries, default_category, list_override_rules))
+    if custom_instructions:
+        lines.append("=== ADDITIONAL INSTRUCTIONS FROM THE USER ===")
+        lines.append(custom_instructions)
+        lines.append("")
     lines.append("=== IMPORTANT ===")
     lines.append("Return ONLY a valid JSON object (no other text, no markdown code blocks).")
     return "\n".join(lines)
+
+
+def build_prompt_previews(
+    list_entries: list, default_category: str, list_override_rules: list,
+    custom_instructions: str, timezone: str,
+) -> dict:
+    """Settings-page preview -- renders both prompt variants exactly as
+    extract() would build them, so the preview can never drift from what's
+    actually sent to Poe."""
+    today = today_date(timezone)
+    return {
+        "image_prompt": build_image_prompt(
+            today, list_entries, default_category, list_override_rules, custom_instructions
+        ),
+        "text_prompt": build_text_prompt(
+            today, list_entries, default_category, list_override_rules, custom_instructions
+        ),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -513,7 +545,7 @@ def parse_and_shape(
 
 def extract(
     image_data_url: Optional[str], text: Optional[str], timezone: str, list_entries: list,
-    default_category: str, list_override_rules: list,
+    default_category: str, list_override_rules: list, custom_instructions: str = "",
 ) -> dict:
     """Builds the right prompt variant (image / image+text / text-only),
     calls Poe, parses + shapes the result. Raises PoeClientError on any
@@ -527,7 +559,9 @@ def extract(
     upload_date = today_date(timezone)
 
     if has_photo and user_text:
-        prompt = build_image_prompt(upload_date, list_entries, default_category, list_override_rules)
+        prompt = build_image_prompt(
+            upload_date, list_entries, default_category, list_override_rules, custom_instructions
+        )
         prompt += (
             "\n\n=== USER INSTRUCTION ===\n"
             "The user provided the following instruction alongside the image. Use it as your PRIMARY "
@@ -536,9 +570,13 @@ def extract(
             f'User says: "{user_text}"'
         )
     elif has_photo:
-        prompt = build_image_prompt(upload_date, list_entries, default_category, list_override_rules)
+        prompt = build_image_prompt(
+            upload_date, list_entries, default_category, list_override_rules, custom_instructions
+        )
     else:
-        prompt = build_text_prompt(upload_date, list_entries, default_category, list_override_rules)
+        prompt = build_text_prompt(
+            upload_date, list_entries, default_category, list_override_rules, custom_instructions
+        )
         prompt += f'\n\nUser input: "{user_text}"'
 
     content = call_poe(prompt, image_data_url if has_photo else None)

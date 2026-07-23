@@ -222,7 +222,9 @@ def get_settings(conn: sqlite3.Connection) -> dict:
 # Columns that store JSON-encoded values, needing json.dumps() before the
 # UPDATE rather than being written as plain TEXT.
 _SETTINGS_JSON_FIELDS = {"list_override_rules"}
-_SETTINGS_FIELDS = {"list_override_rules", "default_timezone", "default_category"}
+_SETTINGS_FIELDS = {
+    "list_override_rules", "default_timezone", "default_category", "extraction_custom_instructions",
+}
 
 
 def update_settings(conn: sqlite3.Connection, **fields: Any) -> dict:
