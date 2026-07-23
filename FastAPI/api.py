@@ -8,6 +8,7 @@ portfolio-management's api.py).
 """
 
 import base64
+import io
 import os
 import re
 import sqlite3
@@ -17,6 +18,7 @@ from typing import Literal, Optional
 
 import requests
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from PIL import Image
 
 import crud
 import database
@@ -111,18 +113,51 @@ async def extract_route(
     created_via defaults to 'web' (the GUI's own capture page never sends
     this field); mcp_server.py's extract_tasks tool explicitly sends
     'mcp' so draft_created_via reflects who actually created the draft."""
-    image_data_url = None
-    photo_data_b64 = None
-    if image is not None:
-        raw = await image.read()
-        photo_data_b64 = base64.b64encode(raw).decode()
-        image_data_url = poe_client.to_data_url(raw, image.content_type or "image/jpeg")
-    return _run_extraction_and_create_draft(conn, image_data_url, text, timezone, created_via, photo_data_b64)
+    image_bytes = await image.read() if image is not None else None
+    return _run_extraction_and_create_draft(conn, image_bytes, text, timezone, created_via)
+
+
+_PIL_FORMAT_TO_CONTENT_TYPE = {
+    "JPEG": "image/jpeg", "PNG": "image/png", "GIF": "image/gif",
+    "WEBP": "image/webp", "BMP": "image/bmp",
+}
+
+
+def _validate_and_type_image(raw: bytes) -> str:
+    """Fully decodes the image (not just a header check) via Pillow,
+    catching corruption anywhere in the file -- not only a mangled
+    header/footer -- and returns its real content-type as detected from
+    the actual decoded bytes, not whatever the caller happened to declare
+    (e.g. extract_route trusted the multipart part's own Content-Type
+    before this existed; that's the same "believe the caller's incidental
+    metadata over the real content" mistake the attachment filename bug
+    already taught us to avoid).
+
+    Raised on any decode failure, most commonly a base64 relay that
+    silently corrupted the image before it ever reached this route (a
+    single dropped/altered character in a long base64 string is enough,
+    and retrying the identical value fails identically) -- the error
+    message below is what an agent actually sees, so it names the
+    concrete next step rather than leaving Poe's own confusing rejection
+    as the only signal."""
+    try:
+        with Image.open(io.BytesIO(raw)) as img:
+            img.load()
+            fmt = img.format
+    except Exception as exc:
+        raise helpers.ValidationError(
+            "The image data did not decode as a valid image. This usually means the base64 passed to "
+            "extract_tasks's image_b64 doesn't exactly match the original file's bytes -- a single "
+            "dropped or altered character in a long base64 string is enough to break this, and retrying "
+            "the same value will fail identically. If you can't guarantee an exact byte-for-byte base64 "
+            "relay, use get_photo_extraction_upload_url instead, which needs no base64 at all."
+        ) from exc
+    return _PIL_FORMAT_TO_CONTENT_TYPE.get(fmt, "application/octet-stream")
 
 
 def _run_extraction_and_create_draft(
-    conn: sqlite3.Connection, image_data_url: Optional[str], text: Optional[str],
-    timezone: Optional[str], created_via: str, photo_data_b64: Optional[str],
+    conn: sqlite3.Connection, image_bytes: Optional[bytes], text: Optional[str],
+    timezone: Optional[str], created_via: str,
 ) -> dict:
     """Shared by extract_route (image already read from a multipart
     UploadFile) and redeem_photo_extraction_upload_route (image already
@@ -133,6 +168,13 @@ def _run_extraction_and_create_draft(
     settings = crud.get_settings(conn)
     tz = timezone or settings["default_timezone"]
     list_entries = crud.list_all_list_entries(conn)
+
+    image_data_url = None
+    photo_data_b64 = None
+    if image_bytes is not None:
+        content_type = _validate_and_type_image(image_bytes)
+        photo_data_b64 = base64.b64encode(image_bytes).decode()
+        image_data_url = poe_client.to_data_url(image_bytes, content_type)
 
     result = poe_client.extract(
         image_data_url, text, tz, list_entries,
@@ -206,13 +248,11 @@ async def redeem_photo_extraction_upload_route(
     if len(raw) > 20 * 1024 * 1024:
         crud.record_photo_extraction_upload_result(conn, token, "failed", {"detail": "image exceeds 20MB limit"})
         raise HTTPException(status_code=413, detail="image exceeds the 20MB extraction limit")
-    photo_data_b64 = base64.b64encode(raw).decode()
-    image_data_url = poe_client.to_data_url(raw, "image/jpeg")
     try:
         draft = _run_extraction_and_create_draft(
-            conn, image_data_url, claimed["upload_text"], claimed["upload_timezone"], "mcp", photo_data_b64,
+            conn, raw, claimed["upload_text"], claimed["upload_timezone"], "mcp",
         )
-    except poe_client.PoeClientError as exc:
+    except (poe_client.PoeClientError, helpers.ValidationError) as exc:
         crud.record_photo_extraction_upload_result(conn, token, "failed", {"detail": str(exc)})
         raise
     crud.record_photo_extraction_upload_result(conn, token, "completed", {"draft_id": draft["draft_id"]})
