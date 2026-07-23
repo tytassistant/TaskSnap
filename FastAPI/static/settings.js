@@ -183,6 +183,13 @@ function closeListEditModal() { listEditModal.classList.remove("open"); }
 listEditModal.addEventListener("click", function(e) { if (e.target === listEditModal) { closeListEditModal(); } });
 $id("leCancelBtn").addEventListener("click", closeListEditModal);
 
+// A <input list=...> datalist filters its suggestions by the field's
+// current text -- with an existing list's full name already filled in,
+// that leaves only itself as a match. Selecting the text on focus means
+// the very next keystroke replaces it, so the full set of real MS list
+// names shows up immediately instead of needing a manual clear first.
+$id("leName").addEventListener("focus", function() { this.select(); });
+
 $id("addListEntryBtn").addEventListener("click", function() { openListEditModal(null); });
 
 $id("leSaveBtn").addEventListener("click", function() {
