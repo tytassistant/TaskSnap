@@ -111,25 +111,37 @@ async def extract_route(
     created_via defaults to 'web' (the GUI's own capture page never sends
     this field); mcp_server.py's extract_tasks tool explicitly sends
     'mcp' so draft_created_via reflects who actually created the draft."""
-    settings = crud.get_settings(conn)
-    tz = timezone or settings["default_timezone"]
-    list_entries = crud.list_all_list_entries(conn)
-
     image_data_url = None
     photo_data_b64 = None
     if image is not None:
         raw = await image.read()
         photo_data_b64 = base64.b64encode(raw).decode()
         image_data_url = poe_client.to_data_url(raw, image.content_type or "image/jpeg")
+    return _run_extraction_and_create_draft(conn, image_data_url, text, timezone, created_via, photo_data_b64)
+
+
+def _run_extraction_and_create_draft(
+    conn: sqlite3.Connection, image_data_url: Optional[str], text: Optional[str],
+    timezone: Optional[str], created_via: str, photo_data_b64: Optional[str],
+) -> dict:
+    """Shared by extract_route (image already read from a multipart
+    UploadFile) and redeem_photo_extraction_upload_route (image already
+    read from the upload-URL redemption) -- the one place Poe gets called
+    and the resulting draft/tasks get created, so the two call sites can
+    never drift out of sync with each other (the reminder_datetime bug
+    class this avoids: two near-identical code paths silently diverging)."""
+    settings = crud.get_settings(conn)
+    tz = timezone or settings["default_timezone"]
+    list_entries = crud.list_all_list_entries(conn)
 
     result = poe_client.extract(
         image_data_url, text, tz, list_entries,
         settings["default_category"], settings["list_override_rules"],
     )
 
-    if image is not None and (text or "").strip():
+    if image_data_url is not None and (text or "").strip():
         source = "photo_text"
-    elif image is not None:
+    elif image_data_url is not None:
         source = "photo"
     else:
         source = "text"
@@ -150,6 +162,78 @@ async def extract_route(
     # GUI's read-only "tasks default to next business day after X" display.
     draft["photo_date"] = result["photo_date"]
     return draft
+
+
+@router.post("/extract/upload-requests", tags=["Extraction"], status_code=201)
+def create_photo_extraction_upload_request_route(
+    data: schemas.PhotoExtractionUploadRequestCreate, conn: sqlite3.Connection = Depends(get_db),
+):
+    upload = crud.create_photo_extraction_upload(conn, text=data.text, tz=data.timezone)
+    return {
+        "upload_token": upload["upload_token"],
+        "upload_url": f"{LAN_BASE}/api/extract/uploads/{upload['upload_token']}",
+        "expires_datetime_utc": upload["upload_expires_datetime_UTC"],
+    }
+
+
+def _claim_photo_extraction_upload_or_error(conn: sqlite3.Connection, token: str) -> dict:
+    upload = crud.get_photo_extraction_upload(conn, token)
+    if upload is None:
+        raise HTTPException(status_code=404, detail="upload token not found")
+    if upload["upload_status"] != "pending":
+        raise HTTPException(status_code=410, detail=f"upload token already {upload['upload_status']}")
+    if helpers.utc_now_iso() > upload["upload_expires_datetime_UTC"]:
+        crud.record_photo_extraction_upload_result(conn, token, "failed", {"detail": "expired before redemption"})
+        raise HTTPException(status_code=410, detail="upload token expired -- request a new one")
+    claimed = crud.claim_photo_extraction_upload(conn, token)
+    if claimed is None:
+        raise HTTPException(status_code=410, detail="upload token already used")
+    return claimed
+
+
+@router.post("/extract/uploads/{token}", tags=["Extraction"])
+async def redeem_photo_extraction_upload_route(
+    token: str, file: UploadFile = File(...), conn: sqlite3.Connection = Depends(get_db),
+):
+    """The single-use redemption for get_photo_extraction_upload_url --
+    runs the full Poe extraction synchronously and returns the finished
+    draft directly, same shape extract_route returns. AuthGuard-exempt
+    (main.py) since the caller is an untrusted-but-LAN-local platform with
+    neither an X-API-Key nor a session -- the 256-bit token in the URL is
+    the sole credential, same model as /api/uploads/{token}."""
+    claimed = _claim_photo_extraction_upload_or_error(conn, token)
+    raw = await file.read()
+    if len(raw) > 20 * 1024 * 1024:
+        crud.record_photo_extraction_upload_result(conn, token, "failed", {"detail": "image exceeds 20MB limit"})
+        raise HTTPException(status_code=413, detail="image exceeds the 20MB extraction limit")
+    photo_data_b64 = base64.b64encode(raw).decode()
+    image_data_url = poe_client.to_data_url(raw, "image/jpeg")
+    try:
+        draft = _run_extraction_and_create_draft(
+            conn, image_data_url, claimed["upload_text"], claimed["upload_timezone"], "mcp", photo_data_b64,
+        )
+    except poe_client.PoeClientError as exc:
+        crud.record_photo_extraction_upload_result(conn, token, "failed", {"detail": str(exc)})
+        raise
+    crud.record_photo_extraction_upload_result(conn, token, "completed", {"draft_id": draft["draft_id"]})
+    return draft
+
+
+@router.get("/extract/uploads/{token}", tags=["Extraction"])
+def check_photo_extraction_upload_route(token: str, conn: sqlite3.Connection = Depends(get_db)):
+    """Status check for check_photo_extraction_upload -- also
+    AuthGuard-exempt (same prefix as the redemption POST above); harmless
+    since the token itself is still the real credential regardless of
+    HTTP method."""
+    upload = crud.get_photo_extraction_upload(conn, token)
+    if upload is None:
+        raise HTTPException(status_code=404, detail="upload token not found")
+    response = {"status": upload["upload_status"]}
+    if upload["upload_status"] == "completed":
+        response["draft"] = crud.get_draft(conn, upload["upload_result"]["draft_id"])
+    elif upload["upload_status"] == "failed" and upload["upload_result"]:
+        response["detail"] = upload["upload_result"].get("detail")
+    return response
 
 
 # ---------------------------------------------------------------------------

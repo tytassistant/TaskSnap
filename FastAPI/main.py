@@ -69,14 +69,18 @@ app.include_router(api_router)
 API_KEY = helpers.get_api_key()
 
 _AUTH_EXEMPT_PATHS = {"/login", "/health"}
-# /api/uploads/ (trailing slash deliberate, so this can never accidentally
-# also exempt some future unrelated /api/upload-something route): the
-# get_task_attachment_upload_url redemption route (api.py) authenticates
-# solely via the single-use, short-lived token in its own URL path -- the
-# remote LAN MCP client redeeming it has neither an X-API-Key nor a session
-# cookie. The token-minting route stays under normal AuthGuard; only
-# redemption is exempt.
-_AUTH_EXEMPT_PREFIXES = ("/static/", "/api/uploads/")
+# /api/uploads/ and /api/extract/uploads/ (trailing slashes deliberate, so
+# these can never accidentally also exempt some future unrelated
+# /api/upload-something route): the get_task_attachment_upload_url and
+# get_photo_extraction_upload_url redemption routes (api.py) each
+# authenticate solely via the single-use, short-lived token in their own
+# URL path -- the remote LAN caller redeeming one has neither an
+# X-API-Key nor a session cookie. /api/extract/uploads/{token} also
+# answers GET (status-check) at the same path -- exempting that too is
+# harmless, since the token itself is still the real credential regardless
+# of HTTP method. The token-minting routes stay under normal AuthGuard;
+# only redemption/status-check is exempt.
+_AUTH_EXEMPT_PREFIXES = ("/static/", "/api/uploads/", "/api/extract/uploads/")
 
 
 def _db_check(fn, *args) -> bool:

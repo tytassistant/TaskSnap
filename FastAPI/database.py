@@ -176,6 +176,28 @@ TABLE_DDL = [
         upload_completed_datetime_UTC TEXT
     )
     """,
+    # Mirrors attachment_upload_table's shape/states, for the same reason
+    # (get_photo_extraction_upload_url) -- minus list/task id and filename/
+    # content-type (no existing task to attach to; extraction *creates* the
+    # draft), plus upload_text/upload_timezone (declared at mint time,
+    # since those are small and transport reliably over MCP's JSON-only
+    # tools/call, unlike the photo itself). The draft is only created once
+    # Poe succeeds, inside the redemption route -- not at mint time --
+    # avoiding a schema change to draft_table's own draft_status CHECK
+    # constraint just to add a "pending extraction" state.
+    """
+    CREATE TABLE IF NOT EXISTS photo_extraction_upload_table (
+        upload_token TEXT PRIMARY KEY,
+        upload_text TEXT,
+        upload_timezone TEXT,
+        upload_status TEXT NOT NULL DEFAULT 'pending'
+            CHECK (upload_status IN ('pending', 'claimed', 'completed', 'failed')),
+        upload_result TEXT,
+        upload_create_datetime_UTC TEXT NOT NULL,
+        upload_expires_datetime_UTC TEXT NOT NULL,
+        upload_completed_datetime_UTC TEXT
+    )
+    """,
 ]
 
 ALL_TABLES = [
@@ -188,6 +210,7 @@ ALL_TABLES = [
     "draft_new_list_table",
     "pending_action_table",
     "attachment_upload_table",
+    "photo_extraction_upload_table",
 ]
 
 # draft_task/draft_new_list lookups are always "all rows for this draft" --

@@ -859,3 +859,83 @@ def record_attachment_upload_result(conn: sqlite3.Connection, token: str, status
     )
     conn.commit()
     return get_attachment_upload(conn, token)
+
+
+# ---------------------------------------------------------------------------
+# photo_extraction_upload_table -- backs get_photo_extraction_upload_url
+# (mcp_server.py) and its /api/extract/uploads/{token} redemption+status
+# routes (api.py), which are AuthGuard-exempt for the same reason as
+# attachment_upload_table above: the token here is the only credential
+# those routes check. The draft itself doesn't exist yet when this is
+# minted -- it's only created once Poe succeeds, inside the redemption
+# route -- so unlike attachment_upload_table there's no existing
+# list_id/task_id to record, just the text/timezone declared at mint time.
+# ---------------------------------------------------------------------------
+
+_EXTRACTION_UPLOAD_TTL_SECONDS = 900  # 15 minutes
+
+
+def create_photo_extraction_upload(conn: sqlite3.Connection, text: Optional[str], tz: Optional[str]) -> dict:
+    """Mints a single-use token -- secrets.token_urlsafe (256 bits), same
+    reasoning as create_attachment_upload: it doubles as the redemption
+    route's sole credential. Parameter named `tz`, not `timezone` --
+    `timezone` is this module's own `from datetime import timezone` import
+    (used two lines down for `timezone.utc`); a same-named parameter would
+    shadow it for the whole function body and break that call."""
+    token = secrets.token_urlsafe(32)
+    now = helpers.utc_now_iso()
+    expires = (
+        datetime.now(timezone.utc) + timedelta(seconds=_EXTRACTION_UPLOAD_TTL_SECONDS)
+    ).isoformat(timespec="seconds")
+    conn.execute(
+        """
+        INSERT INTO photo_extraction_upload_table
+            (upload_token, upload_text, upload_timezone, upload_status,
+             upload_create_datetime_UTC, upload_expires_datetime_UTC)
+        VALUES (?, ?, ?, 'pending', ?, ?)
+        """,
+        (token, text, tz, now, expires),
+    )
+    conn.commit()
+    return get_photo_extraction_upload(conn, token)
+
+
+def _photo_extraction_upload_row_to_dict(row: sqlite3.Row) -> dict:
+    d = dict(row)
+    if d["upload_result"] is not None:
+        d["upload_result"] = json.loads(d["upload_result"])
+    return d
+
+
+def get_photo_extraction_upload(conn: sqlite3.Connection, token: str) -> Optional[dict]:
+    row = conn.execute(
+        "SELECT * FROM photo_extraction_upload_table WHERE upload_token = ?", (token,)
+    ).fetchone()
+    return _photo_extraction_upload_row_to_dict(row) if row else None
+
+
+def claim_photo_extraction_upload(conn: sqlite3.Connection, token: str) -> Optional[dict]:
+    """Atomically moves a token pending -> claimed, same race-closing
+    reasoning as claim_attachment_upload."""
+    cur = conn.execute(
+        "UPDATE photo_extraction_upload_table SET upload_status = 'claimed' "
+        "WHERE upload_token = ? AND upload_status = 'pending'",
+        (token,),
+    )
+    conn.commit()
+    return get_photo_extraction_upload(conn, token) if cur.rowcount else None
+
+
+def record_photo_extraction_upload_result(conn: sqlite3.Connection, token: str, status: str, result: dict) -> dict:
+    """Terminal state after a redemption attempt -- 'completed' (draft
+    created, result holds its draft_id) or 'failed' (oversized image,
+    PoeClientError, or expiry caught late)."""
+    if status not in ("completed", "failed"):
+        raise helpers.ValidationError(f"Invalid photo-extraction-upload result status '{status}'")
+    conn.execute(
+        "UPDATE photo_extraction_upload_table SET upload_status = ?, upload_result = ?, "
+        "upload_completed_datetime_UTC = ? WHERE upload_token = ?",
+        (status, json.dumps(result, default=str), helpers.utc_now_iso(), token),
+    )
+    conn.commit()
+    return get_photo_extraction_upload(conn, token)

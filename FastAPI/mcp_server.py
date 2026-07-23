@@ -360,6 +360,11 @@ def extract_tasks(
     base64 image bytes -- NOT a data: URL, this tool adds that prefix
     itself) or text.
 
+    If you can't reliably reproduce a photo's exact bytes as base64 (e.g.
+    a large photo, or a platform that regenerates/retypes the base64
+    rather than passing it through untouched -- this silently corrupts
+    it), use get_photo_extraction_upload_url instead.
+
     Returns the draft with its tasks, each carrying a task_id -- ALWAYS
     present these tasks back to the user (e.g. as a list) before calling
     sync_draft; never sync silently.
@@ -406,6 +411,79 @@ def extract_tasks(
             image_b64 = image_b64.split(";base64,", 1)[1]
         files = {"image": ("photo.jpg", base64.b64decode(image_b64), "image/jpeg")}
     return _shape_draft(_api("POST", "/api/extract", data=data, files=files))
+
+
+@mcp.tool()
+def get_photo_extraction_upload_url(text: Optional[str] = None, timezone: Optional[str] = None) -> dict:
+    """Mints a single-use upload link for extracting tasks/events from a
+    photo, for when you can't reliably reproduce the photo's exact bytes
+    as base64 text (extract_tasks's image_b64 param) -- e.g. a large
+    photo, or a platform where the base64 gets regenerated/retyped rather
+    than passed through untouched, which silently corrupts it. If
+    image_b64 has worked reliably for you before, prefer extract_tasks
+    instead -- it's one call instead of two steps.
+
+    This tool sends NO image bytes and does no encoding -- it only
+    returns a plain upload_url; you still upload the actual photo to it
+    as a second step (see below).
+
+    text is any instruction accompanying the photo (e.g. "these are all
+    for Theo", "focus on the science section") -- give it here, at mint
+    time, not anywhere in the upload step: there is no way to attach it
+    to the upload itself, and the photo and text still reach the AI
+    extraction together, in the same request, exactly as if you'd called
+    extract_tasks directly. timezone works the same as extract_tasks's
+    timezone param -- omit to use the app's configured default_timezone.
+
+    After calling this, perform a normal HTTP file upload: a
+    multipart/form-data POST of the raw photo to upload_url, with the
+    file in a field named "file" -- the same kind of thing as a
+    browser's <input type="file"> form submit, NOT a script, NOT code
+    execution, and NOT base64 text in a JSON body. Example from a shell:
+    `curl -F "file=@/path/to/photo.jpg" "<upload_url>"`.
+
+    The upload runs the full AI extraction before responding (this can
+    take a while, same as extract_tasks) and returns the finished draft
+    directly in the response -- if your platform's upload mechanism shows
+    you that response, you're done (note: this raw response has each
+    task's raw task_checked field, not the to_sync field extract_tasks/
+    get_draft normally show you -- same meaning, just unrenamed). If your
+    platform doesn't show you the upload's response, or you're unsure,
+    call check_photo_extraction_upload with the same upload_token instead
+    of guessing -- its result IS reshaped the same way extract_tasks/
+    get_draft are (to_sync and all). Either way, ALWAYS present the
+    resulting tasks back to the user before calling sync_draft; never
+    sync silently, same rule as extract_tasks.
+
+    upload_url is SINGLE-USE and expires at expires_datetime_utc (15
+    minutes from now): if the upload doesn't happen in time, fails
+    partway, or you already used it, do not retry the same upload_url --
+    call this tool again for a fresh one."""
+    payload = {}
+    if text is not None:
+        payload["text"] = text
+    if timezone is not None:
+        payload["timezone"] = timezone
+    return _api("POST", "/api/extract/upload-requests", json=payload)
+
+
+@mcp.tool()
+def check_photo_extraction_upload(upload_token: str) -> dict:
+    """Checks the status of a photo extraction started via
+    get_photo_extraction_upload_url. status is one of:
+    - "pending": not uploaded yet (or the URL expired unused).
+    - "claimed": upload received, AI extraction is running -- wait a few
+      seconds and call this again.
+    - "completed": the finished draft is in the "draft" field, same
+      shape as get_draft/extract_tasks -- ALWAYS present its tasks back
+      to the user before calling sync_draft; never sync silently.
+    - "failed": something went wrong (see "detail") -- inform the user;
+      consider calling get_photo_extraction_upload_url again for a fresh
+      attempt."""
+    result = _api("GET", f"/api/extract/uploads/{upload_token}")
+    if "draft" in result:
+        result["draft"] = _shape_draft(result["draft"])
+    return result
 
 
 @mcp.tool()

@@ -242,6 +242,15 @@ class AttachmentUploadRequestCreate(_StrictModel):
         return v
 
 
+class PhotoExtractionUploadRequestCreate(_StrictModel):
+    """Body of POST /api/extract/upload-requests -- mints a single-use
+    token/URL for get_photo_extraction_upload_url. Both fields optional,
+    same as extract_tasks's own text/timezone params -- the photo itself
+    is never here, it arrives via the separate upload step."""
+    text: Optional[str] = None
+    timezone: Optional[str] = None
+
+
 # ---------------------------------------------------------------------------
 # pending_action_table
 # ---------------------------------------------------------------------------
