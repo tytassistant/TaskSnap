@@ -144,7 +144,13 @@ async function loadListEntries() {
   var listEntries = await apiFetch("/api/list-entries");
   var body = $id("listSummaryBody");
   body.innerHTML = "";
-  listEntries.forEach(function(entry) { body.appendChild(renderListSummaryRow(entry)); });
+  var sorted = listEntries.slice().sort(function(a, b) {
+    var catA = (a.list_category || [])[0] || "";
+    var catB = (b.list_category || [])[0] || "";
+    if (catA !== catB) { return catA.localeCompare(catB); }
+    return (a.list_name || "").localeCompare(b.list_name || "");
+  });
+  sorted.forEach(function(entry) { body.appendChild(renderListSummaryRow(entry)); });
   var categorySelect = $id("defaultCategory");
   var currentSelection = categorySelect.options.length > 0 ? categorySelect.value : _lastKnownDefaultCategory;
   populateCategorySelect(currentSelection, listEntries);
@@ -225,7 +231,6 @@ $id("leDeleteBtn").addEventListener("click", function() {
 
 async function loadSettings() {
   var settings = await apiFetch("/api/settings");
-  $id("listOverrideRules").value = listToLines(settings.list_override_rules);
   $id("extractionCustomInstructions").value = settings.extraction_custom_instructions || "";
   populateTimezoneSelect(settings.default_timezone);
   _lastKnownDefaultCategory = settings.default_category || null;
@@ -254,14 +259,14 @@ async function loadMsStatus() {
 }
 
 // ---------------------------------------------------------------------------
-// Save (list_override_rules / default_timezone / default_category /
-// extraction_custom_instructions only -- list entries save independently
-// via the list-edit modal's own Save Changes/Delete List buttons)
+// Save (default_timezone / default_category / extraction_custom_instructions
+// only -- list entries save independently via the list-edit modal's own
+// Save Changes/Delete List buttons; list_override_rules is no longer
+// user-editable, see the "Extraction prompt" card's custom instructions)
 // ---------------------------------------------------------------------------
 
 $id("saveBtn").addEventListener("click", function() {
   var payload = {
-    list_override_rules: linesToList($id("listOverrideRules").value),
     default_timezone: $id("defaultTimezone").value,
     default_category: $id("defaultCategory").value,
     extraction_custom_instructions: $id("extractionCustomInstructions").value,

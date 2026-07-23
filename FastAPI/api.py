@@ -601,7 +601,21 @@ def create_list_entry_route(data: schemas.ListEntryCreate, conn: sqlite3.Connect
 
 @router.patch("/list-entries/{list_id}", tags=["List Entries"])
 def update_list_entry_route(list_id: str, data: schemas.ListEntryUpdate, conn: sqlite3.Connection = Depends(get_db)):
-    return crud.update_list_entry(conn, list_id, **data.model_dump(exclude_unset=True))
+    """Renaming a list here must also rename the real Microsoft To Do list,
+    not just this row's list_name -- find_or_create_list (sync_draft's list
+    resolution) matches purely by displayName at sync time, never by
+    list_ms_id, so a local-only rename would desync from the real list and
+    cause the next sync to create a duplicate instead of finding it. The
+    Graph rename happens BEFORE the local row is updated, so a Graph failure
+    leaves list_table consistent with the real list's actual current name."""
+    fields = data.model_dump(exclude_unset=True)
+    if "list_name" in fields:
+        current = crud.get_list_entry(conn, list_id)
+        if current is None:
+            raise helpers.ValidationError(f"Unknown list_id '{list_id}'")
+        if current["list_ms_id"] and fields["list_name"] != current["list_name"]:
+            graph_client.rename_list(current["list_ms_id"], fields["list_name"])
+    return crud.update_list_entry(conn, list_id, **fields)
 
 
 @router.delete("/list-entries/{list_id}", tags=["List Entries"])

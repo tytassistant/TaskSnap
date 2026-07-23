@@ -285,14 +285,20 @@ body {
 .btn-accent:hover { box-shadow: 0 4px 18px var(--accent-glow); }
 .btn-outline {
   background: transparent;
-  border: 2px solid var(--border-strong);
+  border: 1px solid var(--border-strong);
+  padding: 11px 21px;
   color: var(--text-primary);
+  box-shadow: var(--shadow-sm);
 }
-.btn-outline:hover { border-color: var(--accent); color: var(--accent); }
+.btn-outline:hover { border-color: var(--accent); color: var(--accent); box-shadow: var(--shadow-md); }
 .btn-danger {
   background: var(--danger-light);
   color: var(--danger);
+  border: 1px solid var(--danger);
+  padding: 11px 21px;
+  box-shadow: var(--shadow-sm);
 }
+.btn-danger:hover { box-shadow: var(--shadow-md); }
 .btn-sm { padding: 8px 14px; font-size: 13px; }
 .btn-block { width: 100%; }
 .btn:disabled {

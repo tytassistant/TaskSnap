@@ -97,6 +97,20 @@ def create_list(list_name: str) -> dict:
     return resp.json()
 
 
+def rename_list(list_ms_id: str, new_name: str) -> dict:
+    """Renames the real Microsoft To Do list itself (not just TaskSnap's own
+    list_table row) -- without this, editing list_name in the settings page
+    would silently desync from the real list: find_or_create_list resolves
+    lists by matching displayName at sync time, never by list_ms_id, so a
+    local-only rename would make the next sync fail to find the (still
+    old-named) real list and create a brand-new duplicate instead."""
+    resp = requests.patch(
+        f"{GRAPH_BASE}/lists/{list_ms_id}", headers=_headers(), json={"displayName": new_name}, timeout=30
+    )
+    _raise_for_graph_error(resp)
+    return resp.json()
+
+
 def find_or_create_list(list_name: str, lists: Optional[list[dict]] = None) -> str:
     """Returns the list's id, creating it if no list with this name (case-
     insensitive) exists yet. Pass an already-fetched `lists` (list_lists()
