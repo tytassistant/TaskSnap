@@ -209,7 +209,9 @@ body {
   line-height: 1.6;
 }
 
-/* Manage lists panel (list_table refactor) */
+/* list-entry-row/list-entry-actions: still used by drafts.js's read-only
+   draft-view modal (reuses this "card in a card" shape), even though the
+   Manage Lists row-editor that originally motivated them is gone. */
 .list-entry-row {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -220,6 +222,15 @@ body {
 .list-entry-actions {
   display: flex; gap: 10px; margin-bottom: 16px;
 }
+
+/* List summary table (list_table refactor) */
+.list-summary-table { width:100%; border-collapse:collapse; font-size:13px; margin-top:4px; }
+.list-summary-table thead th {
+  background: var(--green-primary); color:#fff; padding:8px 10px; text-align:left; font-weight:600;
+}
+.list-summary-table tbody td { padding:8px 10px; border-bottom:1px solid var(--border); color:var(--text-secondary); }
+.list-summary-table tbody tr:hover { background: var(--bg-card-hover); }
+.list-summary-table .ls-default-tick { color: var(--success); }
 
 /* Input Fields */
 .field { margin-bottom: 16px; }

@@ -98,16 +98,30 @@
     </details>
   </div>
 
-  <!-- Manage lists (list_table refactor) -->
+  <!-- List summary (list_table refactor) -->
   <div class="card">
-    <div class="card-title">Manage lists</div>
+    <div class="card-title">List summary</div>
     <div class="card-desc">
       Each row is one Microsoft To Do list, tagged with a category (who/what context, e.g. a
       person's name) and keywords (what kind of task routes here within that category). The AI
-      extraction pass uses these to route tasks automatically — alt names are other ways you might
-      refer to this list; you don't need to repeat the list name itself there.
+      extraction pass uses these to route tasks automatically. Click the edit icon to change a
+      list's details or delete it.
     </div>
-    <div id="listEntriesContainer"></div>
+    <div style="overflow-x:auto;">
+      <table class="list-summary-table">
+        <thead>
+          <tr>
+            <th>Category</th>
+            <th>List name</th>
+            <th>Alt names</th>
+            <th>Keywords</th>
+            <th>Default</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="listSummaryBody"></tbody>
+      </table>
+    </div>
     <button class="btn btn-outline btn-sm" id="addListEntryBtn" type="button" style="margin-top:10px;">
       <i class="fas fa-plus"></i> Add list
     </button>
@@ -117,6 +131,37 @@
 </div>
 
 <div class="toast-container" id="toastContainer"></div>
+
+<!-- List edit/add modal -->
+<div class="modal-overlay" id="listEditModal">
+  <div class="modal-box">
+    <h3 id="listEditModalTitle"><i class="fas fa-list"></i> Edit list</h3>
+    <div class="field">
+      <label>List name</label>
+      <input type="text" id="leName" list="msListsDatalist" placeholder="e.g. Household Tasks">
+    </div>
+    <div class="field">
+      <label>Alt names <span style="font-weight:400;">(one per line, optional)</span></label>
+      <textarea id="leAlt" rows="2" placeholder="[Example 1]&#10;[Example 2]"></textarea>
+    </div>
+    <div class="field">
+      <label>Category</label>
+      <input type="text" id="leCategory" placeholder="e.g. Theo">
+    </div>
+    <div class="field">
+      <label>Keywords <span style="font-weight:400;">(one per line, optional)</span></label>
+      <textarea id="leKeywords" rows="3" placeholder="[Example 1]&#10;[Example 2]"></textarea>
+    </div>
+    <label style="display:flex; align-items:center; gap:8px; font-size:14px; margin-bottom:16px;">
+      <input type="checkbox" id="leDefault" style="width:16px; height:16px;"> Default list for this category
+    </label>
+    <button class="btn btn-outline btn-block" id="leCancelBtn" type="button" style="margin-bottom:8px;">Cancel</button>
+    <button class="btn btn-danger btn-block" id="leDeleteBtn" type="button" style="margin-bottom:8px;">
+      <i class="fas fa-trash"></i> Delete List
+    </button>
+    <button class="btn btn-primary btn-block" id="leSaveBtn" type="button">Save Changes</button>
+  </div>
+</div>
 
 <script src="/static/settings.js"></script>
 </body>

@@ -1,5 +1,5 @@
 // Settings page (decision 6's editable extraction rules + MS account
-// connect/disconnect status + list_table refactor's Manage Lists panel).
+// connect/disconnect status + list_table refactor's List summary table).
 // Same apiFetch pattern as the wizard's app.js -- not shared as a common
 // module since neither file is large enough yet to justify the
 // indirection.
@@ -101,7 +101,7 @@ function populateCategorySelect(selected, listEntries) {
 }
 
 // ---------------------------------------------------------------------------
-// Manage lists panel
+// List summary table + edit modal
 // ---------------------------------------------------------------------------
 
 var _msListNames = [];
@@ -116,109 +116,107 @@ function populateMsListsDatalist(msLists) {
   });
 }
 
-function createListEntryRow(entry) {
-  // entry.list_id is null for a not-yet-created blank row.
-  var row = document.createElement("div");
-  row.className = "list-entry-row";
-  row.innerHTML =
-    '<div class="field">' +
-      '<label>List name</label>' +
-      '<input type="text" class="le-name" list="msListsDatalist" placeholder="e.g. Household Tasks">' +
-    '</div>' +
-    '<div class="field">' +
-      '<label>Alt names <span style="font-weight:400;">(one per line, optional)</span></label>' +
-      '<textarea class="le-alt" rows="2" placeholder="[Example 1]&#10;[Example 2]"></textarea>' +
-    '</div>' +
-    '<div class="field">' +
-      '<label>Category</label>' +
-      '<input type="text" class="le-category" placeholder="e.g. Theo">' +
-    '</div>' +
-    '<div class="field">' +
-      '<label>Keywords <span style="font-weight:400;">(one per line, optional)</span></label>' +
-      '<textarea class="le-keywords" rows="3" placeholder="[Example 1]&#10;[Example 2]"></textarea>' +
-    '</div>' +
-    '<label style="display:flex; align-items:center; gap:8px; font-size:14px; margin-bottom:12px;">' +
-      '<input type="checkbox" class="le-default" style="width:16px; height:16px;"> Default list for this category' +
-    '</label>' +
-    '<div class="list-entry-actions">' +
-      '<button type="button" class="btn btn-primary btn-sm le-save">' +
-        (entry.list_id ? "Save" : "Create") +
-      '</button>' +
-      (entry.list_id ? '<button type="button" class="btn btn-outline btn-sm le-delete">Delete</button>' : '') +
-    '</div>';
-
-  row.querySelector(".le-name").value = entry.list_name || "";
-  row.querySelector(".le-alt").value = listToLines(entry.list_alt_names);
-  row.querySelector(".le-category").value = (entry.list_category || [])[0] || "";
-  row.querySelector(".le-keywords").value = listToLines(entry.list_keywords);
-  row.querySelector(".le-default").checked = !!entry.list_is_category_default;
-
-  row.querySelector(".le-save").addEventListener("click", function() {
-    var payload = {
-      list_name: row.querySelector(".le-name").value.trim(),
-      list_alt_names: linesToList(row.querySelector(".le-alt").value),
-      list_category: row.querySelector(".le-category").value.trim() ? [row.querySelector(".le-category").value.trim()] : [],
-      list_keywords: linesToList(row.querySelector(".le-keywords").value),
-      list_is_category_default: row.querySelector(".le-default").checked,
-    };
-    if (!payload.list_name) {
-      showToast("List name is required", "error");
-      return;
-    }
-    var request = entry.list_id
-      ? apiFetch("/api/list-entries/" + entry.list_id, {
-          method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
-        })
-      : apiFetch("/api/list-entries", {
-          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
-        });
-    request
-      .then(function() {
-        showToast(entry.list_id ? "List saved" : "List created", "success");
-        return loadListEntries();
-      })
-      .catch(function(err) { showToast("Could not save list: " + err.message, "error"); });
-  });
-
-  var deleteBtn = row.querySelector(".le-delete");
-  if (deleteBtn) {
-    deleteBtn.addEventListener("click", function() {
-      apiFetch("/api/list-entries/" + entry.list_id, { method: "DELETE" })
-        .then(function() {
-          showToast("List removed", "success");
-          return loadListEntries();
-        })
-        .catch(function(err) { showToast("Could not delete list: " + err.message, "error"); });
-    });
-  }
-
-  return row;
-}
-
-var _pendingNewRow = false;
 // Tracks the server's last-known default_category (updated on initial
 // load and on a successful Settings save) -- used to seed the select the
 // very first time, without clobbering an in-progress (unsaved) selection
 // on later refreshes triggered by editing/deleting a list row.
 var _lastKnownDefaultCategory = null;
 
+function renderListSummaryRow(entry) {
+  var tr = document.createElement("tr");
+  var category = (entry.list_category || [])[0] || "";
+  tr.innerHTML =
+    "<td></td><td></td><td></td><td></td>" +
+    '<td class="ls-default-cell"></td>' +
+    '<td style="text-align:center;"><button type="button" class="icon-btn" title="Edit"><i class="fas fa-edit"></i></button></td>';
+  tr.children[0].textContent = category;
+  tr.children[1].textContent = entry.list_name;
+  tr.children[2].textContent = (entry.list_alt_names || []).join("; ");
+  tr.children[3].textContent = (entry.list_keywords || []).join("; ");
+  if (entry.list_is_category_default) {
+    tr.querySelector(".ls-default-cell").innerHTML = '<i class="fas fa-check ls-default-tick"></i>';
+  }
+  tr.querySelector(".icon-btn").addEventListener("click", function() { openListEditModal(entry); });
+  return tr;
+}
+
 async function loadListEntries() {
   var listEntries = await apiFetch("/api/list-entries");
-  var container = $id("listEntriesContainer");
-  container.innerHTML = "";
-  listEntries.forEach(function(entry) { container.appendChild(createListEntryRow(entry)); });
-  if (_pendingNewRow) {
-    container.appendChild(createListEntryRow({ list_id: null }));
-  }
+  var body = $id("listSummaryBody");
+  body.innerHTML = "";
+  listEntries.forEach(function(entry) { body.appendChild(renderListSummaryRow(entry)); });
   var categorySelect = $id("defaultCategory");
   var currentSelection = categorySelect.options.length > 0 ? categorySelect.value : _lastKnownDefaultCategory;
   populateCategorySelect(currentSelection, listEntries);
   return listEntries;
 }
 
-$id("addListEntryBtn").addEventListener("click", function() {
-  _pendingNewRow = true;
-  $id("listEntriesContainer").appendChild(createListEntryRow({ list_id: null }));
+// ---------------------------------------------------------------------------
+// List edit/add modal
+// ---------------------------------------------------------------------------
+
+var listEditModal = $id("listEditModal");
+var _editingListId = null; // null while the modal is in "add new" mode
+
+function openListEditModal(entry) {
+  entry = entry || { list_id: null };
+  _editingListId = entry.list_id;
+  $id("listEditModalTitle").innerHTML = entry.list_id
+    ? '<i class="fas fa-list"></i> Edit list' : '<i class="fas fa-list"></i> Add list';
+  $id("leName").value = entry.list_name || "";
+  $id("leAlt").value = listToLines(entry.list_alt_names);
+  $id("leCategory").value = (entry.list_category || [])[0] || "";
+  $id("leKeywords").value = listToLines(entry.list_keywords);
+  $id("leDefault").checked = !!entry.list_is_category_default;
+  $id("leDeleteBtn").style.display = entry.list_id ? "" : "none";
+  listEditModal.classList.add("open");
+}
+
+function closeListEditModal() { listEditModal.classList.remove("open"); }
+
+listEditModal.addEventListener("click", function(e) { if (e.target === listEditModal) { closeListEditModal(); } });
+$id("leCancelBtn").addEventListener("click", closeListEditModal);
+
+$id("addListEntryBtn").addEventListener("click", function() { openListEditModal(null); });
+
+$id("leSaveBtn").addEventListener("click", function() {
+  var payload = {
+    list_name: $id("leName").value.trim(),
+    list_alt_names: linesToList($id("leAlt").value),
+    list_category: $id("leCategory").value.trim() ? [$id("leCategory").value.trim()] : [],
+    list_keywords: linesToList($id("leKeywords").value),
+    list_is_category_default: $id("leDefault").checked,
+  };
+  if (!payload.list_name) {
+    showToast("List name is required", "error");
+    return;
+  }
+  var request = _editingListId
+    ? apiFetch("/api/list-entries/" + _editingListId, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+      })
+    : apiFetch("/api/list-entries", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+      });
+  request
+    .then(function() {
+      showToast(_editingListId ? "List saved" : "List created", "success");
+      closeListEditModal();
+      return loadListEntries();
+    })
+    .catch(function(err) { showToast("Could not save list: " + err.message, "error"); });
+});
+
+$id("leDeleteBtn").addEventListener("click", function() {
+  if (!_editingListId) { return; }
+  if (!window.confirm('Delete list "' + $id("leName").value + '"? This can\'t be undone.')) { return; }
+  apiFetch("/api/list-entries/" + _editingListId, { method: "DELETE" })
+    .then(function() {
+      showToast("List removed", "success");
+      closeListEditModal();
+      return loadListEntries();
+    })
+    .catch(function(err) { showToast("Could not delete list: " + err.message, "error"); });
 });
 
 // ---------------------------------------------------------------------------
@@ -256,8 +254,9 @@ async function loadMsStatus() {
 }
 
 // ---------------------------------------------------------------------------
-// Save (list_override_rules / default_timezone / default_category only --
-// Manage Lists rows save independently via their own Save/Create buttons)
+// Save (list_override_rules / default_timezone / default_category /
+// extraction_custom_instructions only -- list entries save independently
+// via the list-edit modal's own Save Changes/Delete List buttons)
 // ---------------------------------------------------------------------------
 
 $id("saveBtn").addEventListener("click", function() {
