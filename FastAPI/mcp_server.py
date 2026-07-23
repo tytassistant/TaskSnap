@@ -395,6 +395,15 @@ def extract_tasks(
         data["timezone"] = timezone
     files = None
     if image_b64:
+        # Defensive: if a caller passes a full `data:image/jpeg;base64,...`
+        # URL despite the docstring saying not to, base64.b64decode silently
+        # discards the non-base64 characters (:;,) in that prefix rather
+        # than erroring, splicing garbage bytes in front of the real image
+        # and corrupting its magic-byte header -- Poe then rejects it as an
+        # unsupported/unrecognized file type with no clue why. Stripping a
+        # recognized data-URL prefix here makes the call work either way.
+        if image_b64.startswith("data:") and ";base64," in image_b64:
+            image_b64 = image_b64.split(";base64,", 1)[1]
         files = {"image": ("photo.jpg", base64.b64decode(image_b64), "image/jpeg")}
     return _shape_draft(_api("POST", "/api/extract", data=data, files=files))
 
