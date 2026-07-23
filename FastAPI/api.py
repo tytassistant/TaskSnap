@@ -587,7 +587,15 @@ async def redeem_attachment_upload_route(
     graph_client.attach_file_via_upload_session (createUploadSession +
     chunked PUT -- NOT the <3MB base64 contentBytes path used by
     create_task_attachment_route). AuthGuard-exempt on purpose (main.py) --
-    the token in the URL is the only credential."""
+    the token in the URL is the only credential.
+
+    filename/content_type always come from the mint-time token row, never
+    from the multipart part itself: the agent explicitly declared the real
+    name/type via get_task_attachment_upload_url, whereas whatever the
+    remote platform's own upload mechanism puts in the multipart
+    Content-Disposition is incidental and not something the agent controls
+    (some platforms send a generic/placeholder name there) -- trusting it
+    would silently clobber the correct name with a wrong one."""
     claimed = _claim_attachment_upload_or_error(conn, token)
     raw = await file.read()
     if len(raw) > 25 * 1024 * 1024:
@@ -598,8 +606,8 @@ async def redeem_attachment_upload_route(
     try:
         result = graph_client.attach_file_via_upload_session(
             claimed["upload_list_id"], claimed["upload_task_id"], raw,
-            filename=file.filename or claimed["upload_filename"],
-            content_type=file.content_type or claimed["upload_content_type"],
+            filename=claimed["upload_filename"],
+            content_type=claimed["upload_content_type"],
         )
     except graph_client.GraphError as exc:
         crud.record_attachment_upload_result(conn, token, "failed", {"detail": str(exc)})

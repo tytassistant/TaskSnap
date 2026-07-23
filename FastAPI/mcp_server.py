@@ -630,7 +630,13 @@ def update_task(
     sync_draft result or a Graph lookup -- NOT a draft's task_id). For a
     task still sitting in a draft, use edit_draft_task instead. status is
     one of notStarted/inProgress/completed/waitingOnOthers/deferred -- use
-    "completed" to mark done, "notStarted" to reopen."""
+    "completed" to mark done, "notStarted" to reopen.
+
+    Only pass the fields you actually want to change -- OMIT title/body/
+    due_datetime/timezone/status entirely to leave each unchanged. Passing
+    an empty string is not the same as omitting it: it CLEARS that field
+    on the task. E.g. to change only the due date, call this with just
+    list_id/task_id/due_datetime -- do not also pass title="" or body=""."""
     payload = {}
     if title is not None:
         payload["title"] = title
@@ -758,9 +764,13 @@ def get_task_attachment_upload_url(list_id: str, task_id: str, filename: str, co
 
     filename/content_type must genuinely match the real file (e.g.
     filename="invoice.pdf", content_type="application/pdf") -- there is no
-    default for either, on purpose. File can be anything from 3 MB up to
-    Microsoft Graph's 25 MB per-task-attachment ceiling (larger files are
-    rejected with a clear error, not silently truncated).
+    default for either, on purpose. This is also THE name that ends up on
+    the attachment in Microsoft To Do, exactly as given here -- whatever
+    filename your upload step itself happens to report is ignored, so it's
+    fine if that step can't preserve the original name. File can be
+    anything from 3 MB up to Microsoft Graph's 25 MB per-task-attachment
+    ceiling (larger files are rejected with a clear error, not silently
+    truncated).
 
     Only for a task that already exists in MS To Do (list_id/task_id from
     list_tasks_in_list, find_tasks_due, or a sync_draft result); a draft's
