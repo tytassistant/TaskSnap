@@ -354,6 +354,7 @@ def _shape_draft(draft: dict) -> dict:
 @mcp.tool()
 def extract_tasks(
     image_b64: Optional[str] = None, text: Optional[str] = None, timezone: Optional[str] = None,
+    filename: Optional[str] = None,
 ) -> dict:
     """Extracts tasks/events from a photo and/or free text, and creates a
     draft holding the result. Provide at least one of image_b64 (raw
@@ -364,6 +365,13 @@ def extract_tasks(
     a large photo, or a platform that regenerates/retypes the base64
     rather than passing it through untouched -- this silently corrupts
     it), use get_photo_extraction_upload_url instead.
+
+    filename (optional, e.g. "IMG-20260723-WA0038.jpg"): if the photo's
+    draft ends up auto-attached to its Microsoft To Do task on
+    sync_draft, this is the name it gets there -- omit it and a generic
+    "todo-list-photo.jpg" is used instead. There's no way to detect the
+    original filename from the image bytes themselves, so give it here
+    if you know it and want it preserved.
 
     Returns the draft with its tasks, each carrying a task_id -- ALWAYS
     present these tasks back to the user (e.g. as a list) before calling
@@ -398,6 +406,8 @@ def extract_tasks(
         data["text"] = text
     if timezone is not None:
         data["timezone"] = timezone
+    if filename is not None:
+        data["filename"] = filename
     files = None
     if image_b64:
         # Defensive: if a caller passes a full `data:image/jpeg;base64,...`
@@ -414,7 +424,9 @@ def extract_tasks(
 
 
 @mcp.tool()
-def get_photo_extraction_upload_url(text: Optional[str] = None, timezone: Optional[str] = None) -> dict:
+def get_photo_extraction_upload_url(
+    text: Optional[str] = None, timezone: Optional[str] = None, filename: Optional[str] = None,
+) -> dict:
     """Mints a single-use upload link for extracting tasks/events from a
     photo, for when you can't reliably reproduce the photo's exact bytes
     as base64 text (extract_tasks's image_b64 param) -- e.g. a large
@@ -434,6 +446,13 @@ def get_photo_extraction_upload_url(text: Optional[str] = None, timezone: Option
     extraction together, in the same request, exactly as if you'd called
     extract_tasks directly. timezone works the same as extract_tasks's
     timezone param -- omit to use the app's configured default_timezone.
+
+    filename (optional, e.g. "IMG-20260723-WA0038.jpg") works the same as
+    extract_tasks's own filename param -- give it here, at mint time, not
+    as part of the upload step: whatever filename the upload step's own
+    multipart Content-Disposition happens to report is ignored (it isn't
+    reliably preserved by every platform), so this is the only way to
+    name the eventual Microsoft To Do attachment yourself.
 
     After calling this, perform a normal HTTP file upload: a
     multipart/form-data POST of the raw photo to upload_url, with the
@@ -464,6 +483,8 @@ def get_photo_extraction_upload_url(text: Optional[str] = None, timezone: Option
         payload["text"] = text
     if timezone is not None:
         payload["timezone"] = timezone
+    if filename is not None:
+        payload["filename"] = filename
     return _api("POST", "/api/extract/upload-requests", json=payload)
 
 

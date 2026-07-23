@@ -86,6 +86,8 @@ TABLE_DDL = [
         draft_id TEXT PRIMARY KEY,
         draft_source TEXT NOT NULL CHECK (draft_source IN ('photo', 'text', 'photo_text')),
         draft_photo_data TEXT,
+        draft_photo_filename TEXT,
+        draft_photo_content_type TEXT,
         draft_status TEXT NOT NULL DEFAULT 'open'
             CHECK (draft_status IN ('open', 'synced', 'abandoned')),
         draft_created_via TEXT NOT NULL DEFAULT 'web' CHECK (draft_created_via IN ('web', 'mcp')),
@@ -190,6 +192,7 @@ TABLE_DDL = [
         upload_token TEXT PRIMARY KEY,
         upload_text TEXT,
         upload_timezone TEXT,
+        upload_filename TEXT,
         upload_status TEXT NOT NULL DEFAULT 'pending'
             CHECK (upload_status IN ('pending', 'claimed', 'completed', 'failed')),
         upload_result TEXT,
@@ -220,6 +223,24 @@ INDEX_DDL = [
     "CREATE INDEX IF NOT EXISTS idx_draft_new_list_draft_id ON draft_new_list_table(draft_id)",
 ]
 
+# Columns added to an already-existing table after its initial release --
+# "CREATE TABLE IF NOT EXISTS" only creates a table the very first time and
+# never alters one that already exists, so a database created before one of
+# these columns existed needs it patched in explicitly. Safe to run on every
+# startup: each entry is a no-op once its column is already present.
+COLUMN_MIGRATIONS = [
+    ("draft_table", "draft_photo_filename", "TEXT"),
+    ("draft_table", "draft_photo_content_type", "TEXT"),
+    ("photo_extraction_upload_table", "upload_filename", "TEXT"),
+]
+
+
+def _run_column_migrations(conn: sqlite3.Connection) -> None:
+    for table, column, col_type in COLUMN_MIGRATIONS:
+        existing_columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in existing_columns:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+
 
 def get_connection() -> sqlite3.Connection:
     # check_same_thread=False: api.py's extract_route is `async def` (needs
@@ -243,6 +264,7 @@ def init_db() -> None:
     try:
         for ddl in TABLE_DDL:
             conn.execute(ddl)
+        _run_column_migrations(conn)
         for ddl in INDEX_DDL:
             conn.execute(ddl)
         conn.commit()

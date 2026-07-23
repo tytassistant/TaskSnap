@@ -392,17 +392,24 @@ def create_draft(
     source: str,
     photo_data: Optional[str] = None,
     created_via: str = "web",
+    photo_filename: Optional[str] = None,
+    photo_content_type: Optional[str] = None,
 ) -> str:
+    """photo_filename/photo_content_type: the real, caller-declared name and
+    server-detected type of photo_data (when present) -- carried through to
+    sync_draft's auto-attach call so the eventual Microsoft To Do attachment
+    isn't stuck with the generic "todo-list-photo.jpg"/image-jpeg default
+    regardless of what the photo actually is."""
     draft_id = helpers.generate_id(conn, "draft_table", "draft_id", "draft_")
     now = helpers.utc_now_iso()
     conn.execute(
         """
         INSERT INTO draft_table
-            (draft_id, draft_source, draft_photo_data, draft_status, draft_created_via,
-             draft_create_datetime_UTC, draft_last_modified_datetime_UTC)
-        VALUES (?, ?, ?, 'open', ?, ?, ?)
+            (draft_id, draft_source, draft_photo_data, draft_photo_filename, draft_photo_content_type,
+             draft_status, draft_created_via, draft_create_datetime_UTC, draft_last_modified_datetime_UTC)
+        VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?)
         """,
-        (draft_id, source, photo_data, created_via, now, now),
+        (draft_id, source, photo_data, photo_filename, photo_content_type, created_via, now, now),
     )
     conn.commit()
     return draft_id
@@ -875,13 +882,20 @@ def record_attachment_upload_result(conn: sqlite3.Connection, token: str, status
 _EXTRACTION_UPLOAD_TTL_SECONDS = 900  # 15 minutes
 
 
-def create_photo_extraction_upload(conn: sqlite3.Connection, text: Optional[str], tz: Optional[str]) -> dict:
+def create_photo_extraction_upload(
+    conn: sqlite3.Connection, text: Optional[str], tz: Optional[str], filename: Optional[str] = None,
+) -> dict:
     """Mints a single-use token -- secrets.token_urlsafe (256 bits), same
     reasoning as create_attachment_upload: it doubles as the redemption
     route's sole credential. Parameter named `tz`, not `timezone` --
     `timezone` is this module's own `from datetime import timezone` import
     (used two lines down for `timezone.utc`); a same-named parameter would
-    shadow it for the whole function body and break that call."""
+    shadow it for the whole function body and break that call.
+
+    filename is caller-declared here (mint time, reliable JSON), same
+    reasoning as attachment_upload_table's upload_filename -- the
+    multipart upload step's own Content-Disposition filename isn't trusted
+    (already proven unreliable for the attachment-upload feature)."""
     token = secrets.token_urlsafe(32)
     now = helpers.utc_now_iso()
     expires = (
@@ -890,11 +904,11 @@ def create_photo_extraction_upload(conn: sqlite3.Connection, text: Optional[str]
     conn.execute(
         """
         INSERT INTO photo_extraction_upload_table
-            (upload_token, upload_text, upload_timezone, upload_status,
+            (upload_token, upload_text, upload_timezone, upload_filename, upload_status,
              upload_create_datetime_UTC, upload_expires_datetime_UTC)
-        VALUES (?, ?, ?, 'pending', ?, ?)
+        VALUES (?, ?, ?, ?, 'pending', ?, ?)
         """,
-        (token, text, tz, now, expires),
+        (token, text, tz, filename, now, expires),
     )
     conn.commit()
     return get_photo_extraction_upload(conn, token)

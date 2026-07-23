@@ -97,6 +97,7 @@ async def extract_route(
     text: Optional[str] = Form(None),
     timezone: Optional[str] = Form(None),
     created_via: Literal["web", "mcp"] = Form("web"),
+    filename: Optional[str] = Form(None),
     conn: sqlite3.Connection = Depends(get_db),
 ):
     """multipart (image?) + text? + timezone -> Poe extraction (settings-
@@ -112,9 +113,14 @@ async def extract_route(
 
     created_via defaults to 'web' (the GUI's own capture page never sends
     this field); mcp_server.py's extract_tasks tool explicitly sends
-    'mcp' so draft_created_via reflects who actually created the draft."""
+    'mcp' so draft_created_via reflects who actually created the draft.
+
+    filename is caller-declared (extract_tasks's own optional filename
+    param), not the multipart part's own filename -- carried through so
+    sync_draft's eventual photo attachment isn't stuck with a generic
+    default name."""
     image_bytes = await image.read() if image is not None else None
-    return _run_extraction_and_create_draft(conn, image_bytes, text, timezone, created_via)
+    return _run_extraction_and_create_draft(conn, image_bytes, text, timezone, created_via, filename)
 
 
 _PIL_FORMAT_TO_CONTENT_TYPE = {
@@ -157,7 +163,7 @@ def _validate_and_type_image(raw: bytes) -> str:
 
 def _run_extraction_and_create_draft(
     conn: sqlite3.Connection, image_bytes: Optional[bytes], text: Optional[str],
-    timezone: Optional[str], created_via: str,
+    timezone: Optional[str], created_via: str, photo_filename: Optional[str] = None,
 ) -> dict:
     """Shared by extract_route (image already read from a multipart
     UploadFile) and redeem_photo_extraction_upload_route (image already
@@ -171,10 +177,11 @@ def _run_extraction_and_create_draft(
 
     image_data_url = None
     photo_data_b64 = None
+    photo_content_type = None
     if image_bytes is not None:
-        content_type = _validate_and_type_image(image_bytes)
+        photo_content_type = _validate_and_type_image(image_bytes)
         photo_data_b64 = base64.b64encode(image_bytes).decode()
-        image_data_url = poe_client.to_data_url(image_bytes, content_type)
+        image_data_url = poe_client.to_data_url(image_bytes, photo_content_type)
 
     result = poe_client.extract(
         image_data_url, text, tz, list_entries,
@@ -188,7 +195,10 @@ def _run_extraction_and_create_draft(
     else:
         source = "text"
 
-    draft_id = crud.create_draft(conn, source=source, photo_data=photo_data_b64, created_via=created_via)
+    draft_id = crud.create_draft(
+        conn, source=source, photo_data=photo_data_b64, created_via=created_via,
+        photo_filename=photo_filename, photo_content_type=photo_content_type,
+    )
     for t in result["tasks"]:
         matched = list_matcher.resolve_list(t["category_identified"], t["list_identified"], list_entries)
         crud.add_draft_task(
@@ -210,7 +220,7 @@ def _run_extraction_and_create_draft(
 def create_photo_extraction_upload_request_route(
     data: schemas.PhotoExtractionUploadRequestCreate, conn: sqlite3.Connection = Depends(get_db),
 ):
-    upload = crud.create_photo_extraction_upload(conn, text=data.text, tz=data.timezone)
+    upload = crud.create_photo_extraction_upload(conn, text=data.text, tz=data.timezone, filename=data.filename)
     return {
         "upload_token": upload["upload_token"],
         "upload_url": f"{LAN_BASE}/api/extract/uploads/{upload['upload_token']}",
@@ -250,7 +260,7 @@ async def redeem_photo_extraction_upload_route(
         raise HTTPException(status_code=413, detail="image exceeds the 20MB extraction limit")
     try:
         draft = _run_extraction_and_create_draft(
-            conn, raw, claimed["upload_text"], claimed["upload_timezone"], "mcp",
+            conn, raw, claimed["upload_text"], claimed["upload_timezone"], "mcp", claimed["upload_filename"],
         )
     except (poe_client.PoeClientError, helpers.ValidationError) as exc:
         crud.record_photo_extraction_upload_result(conn, token, "failed", {"detail": str(exc)})
@@ -456,7 +466,11 @@ def sync_draft_route(draft_id: str, data: schemas.DraftSyncRequest, conn: sqlite
             continue
         if draft["draft_photo_data"]:
             try:
-                graph_client.attach_photo(list_id, created["id"], draft["draft_photo_data"])
+                graph_client.attach_photo(
+                    list_id, created["id"], draft["draft_photo_data"],
+                    filename=draft["draft_photo_filename"] or "todo-list-photo.jpg",
+                    content_type=draft["draft_photo_content_type"] or "image/jpeg",
+                )
             except graph_client.GraphError:
                 pass  # best-effort -- same as the current JS, task still counts as synced
         crud.mark_draft_task_synced(conn, draft_id, task["task_id"], created["id"], list_id)

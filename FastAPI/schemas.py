@@ -244,11 +244,16 @@ class AttachmentUploadRequestCreate(_StrictModel):
 
 class PhotoExtractionUploadRequestCreate(_StrictModel):
     """Body of POST /api/extract/upload-requests -- mints a single-use
-    token/URL for get_photo_extraction_upload_url. Both fields optional,
-    same as extract_tasks's own text/timezone params -- the photo itself
-    is never here, it arrives via the separate upload step."""
+    token/URL for get_photo_extraction_upload_url. All fields optional,
+    same as extract_tasks's own text/timezone/filename params -- the
+    photo itself is never here, it arrives via the separate upload step.
+    filename is caller-declared here rather than trusted from the upload
+    step's own multipart Content-Disposition, same reasoning as
+    AttachmentUploadRequestCreate's filename (proven unreliable there --
+    some platforms don't preserve it)."""
     text: Optional[str] = None
     timezone: Optional[str] = None
+    filename: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
